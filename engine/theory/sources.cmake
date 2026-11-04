@@ -1,2 +1,2 @@
-# engine_theory sources (filled by key-and-tempo-analysis).
-set(ENGINE_THEORY_SOURCES)
+set(ENGINE_THEORY_SOURCES
+    ${CMAKE_CURRENT_LIST_DIR}/Key.cpp)

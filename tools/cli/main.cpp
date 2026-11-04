@@ -5,9 +5,11 @@
 //   app-cli render  <audio-file> [--block N]   play the imported file through the engine graph offline
 //   app-cli analyze <audio-file>                key / tempo / beat grid as JSON
 
+#include "app/core/AnalysisService.h"
 #include "app/core/AudioEngine.h"
 #include "app/core/OfflineRender.h"
 #include "app/core/RealtimeTrap.h"
+#include "engine/analysis/Analysis.h"
 #include "engine/analysis/AudioImport.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -156,10 +158,27 @@ int cmdRender (const juce::File& file, int blockSize)
     return 0;
 }
 
-int cmdAnalyze (const juce::File&)
+int cmdAnalyze (const juce::File& file)
 {
-    std::cerr << "analyze: not implemented yet (lands with key-and-tempo-analysis)\n";
-    return 3;
+    double importMs = 0.0;
+    const auto capture = importOrReport (file, importMs);
+    if (! capture)
+        return 1;
+
+    // Same threading as the app: analysis runs on the AnalysisService worker, result comes back
+    // on this (message) thread.
+    auto keyDetector = jaudios::analysis::makeKeyDetector (jaudios::analysis::AppConfig::fromEnvironment());
+    jaudios::AnalysisService service;
+    std::optional<jaudios::analysis::AnalysisResult> result;
+
+    service.submit<jaudios::analysis::AnalysisResult> ([&] { return jaudios::analysis::analyze (*capture, *keyDetector.detector); },
+                                                       [&] (jaudios::analysis::AnalysisResult r) { result = std::move (r); });
+    service.waitUntilIdle();
+
+    auto json = jaudios::analysis::toJson (*result, *capture, keyDetector.warning);
+    json.getDynamicObject()->setProperty ("import_ms", importMs);
+    printJson (json);
+    return 0;
 }
 
 } // namespace

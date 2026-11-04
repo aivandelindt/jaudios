@@ -72,14 +72,6 @@ void WaveformView::paint (juce::Graphics& g)
         return;
     }
 
-    g.setColour (juce::Colours::white.withAlpha (0.08f));
-    for (double t : beats)
-        g.drawVerticalLine ((int) timeToX (t), bounds.getY(), bounds.getBottom());
-
-    g.setColour (juce::Colour (0xffe0a040).withAlpha (0.6f));
-    for (double t : downbeats)
-        g.drawVerticalLine ((int) timeToX (t), bounds.getY(), bounds.getBottom());
-
     const float mid = bounds.getCentreY();
     const float half = bounds.getHeight() * 0.45f;
     const int width = getWidth();
@@ -98,6 +90,15 @@ void WaveformView::paint (juce::Graphics& g)
         }
         g.drawVerticalLine (x, mid - hi * half, mid - lo * half + 1.0f);
     }
+
+    // bar grid on top of the waveform
+    g.setColour (juce::Colours::white.withAlpha (0.12f));
+    for (double t : beats)
+        g.drawVerticalLine ((int) timeToX (t), bounds.getY(), bounds.getBottom());
+
+    g.setColour (juce::Colour (0xffe0a040).withAlpha (0.8f));
+    for (double t : downbeats)
+        g.drawVerticalLine ((int) timeToX (t), bounds.getY(), bounds.getBottom());
 
     g.setColour (juce::Colours::white);
     g.drawVerticalLine ((int) timeToX (playhead), bounds.getY(), bounds.getBottom());

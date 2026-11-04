@@ -12,7 +12,20 @@ public:
     const juce::String getApplicationVersion() override { return JAUDIOS_VERSION_STRING; }
     bool moreThanOneInstanceAllowed() override { return false; }
 
-    void initialise (const juce::String&) override { mainWindow = std::make_unique<MainWindow> (getApplicationName()); }
+    void initialise (const juce::String& commandLine) override
+    {
+        mainWindow = std::make_unique<MainWindow> (getApplicationName());
+
+        // "Open with" / command line: first argument that is an existing file.
+        for (const auto& arg : getCommandLineParameterArray())
+            if (const auto file = juce::File::getCurrentWorkingDirectory().getChildFile (arg.unquoted()); file.existsAsFile())
+            {
+                if (auto* content = dynamic_cast<MainComponent*> (mainWindow->getContentComponent()))
+                    content->importFile (file);
+                break;
+            }
+        juce::ignoreUnused (commandLine);
+    }
     void shutdown() override { mainWindow = nullptr; }
     void systemRequestedQuit() override { quit(); }
 

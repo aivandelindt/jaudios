@@ -1,4 +1,11 @@
 set(ENGINE_ANALYSIS_SOURCES
     # audio-capture (file import)
     ${CMAKE_CURRENT_LIST_DIR}/AudioImport.cpp
-    ${CMAKE_CURRENT_LIST_DIR}/Resampler.cpp)
+    ${CMAKE_CURRENT_LIST_DIR}/Resampler.cpp
+    # key-and-tempo-analysis
+    ${CMAKE_CURRENT_LIST_DIR}/Stft.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/Chroma.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/key/KeyDetector.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/key/KeyDetectorChroma.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/tempo/BeatTracker.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/Analysis.cpp)

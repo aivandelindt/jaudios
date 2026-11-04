@@ -4,6 +4,7 @@
 
 #include "app/core/AnalysisService.h"
 #include "app/core/AudioEngine.h"
+#include "engine/analysis/Analysis.h"
 #include "engine/analysis/AudioImport.h"
 
 #include <juce_audio_utils/juce_audio_utils.h>
@@ -25,6 +26,9 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
+    /** Imports + analyses on the Analysis thread (drag-and-drop, Open..., command line). */
+    void importFile (const juce::File& file);
+
     bool isInterestedInFileDrag (const juce::StringArray& files) override;
     void filesDropped (const juce::StringArray& files, int, int) override;
 
@@ -33,18 +37,19 @@ private:
     {
         analysis::ImportResult import;
         WaveformPeaks peaks;
+        std::optional<analysis::AnalysisResult> analysis; // key + tempo + beat grid
     };
 
     void timerCallback() override;
     void showAudioSettings();
     void showOpenDialog();
-    void importFile (const juce::File& file);
     void onImported (ImportJobResult result);
     void updateStatus();
 
     AudioEngine engine;
     AnalysisService analysisService;
     analysis::AudioImporter importer; // format list is read-only after construction: safe on both threads
+    analysis::KeyDetectorHandle keyDetector = analysis::makeKeyDetector (analysis::AppConfig::fromEnvironment());
 
     juce::TextButton settingsButton { "Audio settings..." };
     juce::TextButton openButton { "Open..." };
@@ -54,7 +59,7 @@ private:
     juce::Label statusLabel;
 
     std::unique_ptr<juce::FileChooser> chooser;
-    juce::String deviceError, importStatus;
+    juce::String deviceError, importStatus, analysisStatus;
     bool dragHover = false;
     bool importing = false;
 

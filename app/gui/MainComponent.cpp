@@ -97,7 +97,8 @@ void MainComponent::importFile (const juce::File& file)
         return;
 
     importing = true;
-    importStatus = "Importing " + file.getFileName() + "...";
+    importStatus = "Importing and analysing " + file.getFileName() + "...";
+    analysisStatus = {};
     updateStatus();
 
     analysisService.submit<ImportJobResult> (
@@ -106,7 +107,10 @@ void MainComponent::importFile (const juce::File& file)
             ImportJobResult r;
             r.import = importer.importFile (file);
             if (r.import.ok())
+            {
                 r.peaks = WaveformPeaks::compute (r.import.capture->buffer, r.import.capture->sampleRate);
+                r.analysis = analysis::analyze (*r.import.capture, *keyDetector.detector);
+            }
             return r;
         },
         [this] (ImportJobResult r) { onImported (std::move (r)); });
@@ -131,6 +135,27 @@ void MainComponent::onImported (ImportJobResult r)
     engine.getSourcePlayer().stop();
     engine.getSourcePlayer().setSource (std::make_shared<const juce::AudioBuffer<float>> (std::move (c.buffer)));
     waveform.setPeaks (std::move (r.peaks));
+
+    if (r.analysis)
+    {
+        const auto& a = *r.analysis;
+        waveform.setBarGrid (a.rhythm.downbeats, a.rhythm.beats);
+
+        if (! a.key.top3.empty())
+        {
+            analysisStatus << "Key: " << theory::traditionalName (a.key.top3[0].key) << " ("
+                           << theory::camelot (a.key.top3[0].key) << " / " << theory::openKey (a.key.top3[0].key) << ")";
+            if (a.key.lowConfidence)
+                analysisStatus << "  [low confidence]";
+            analysisStatus << "   alternatives: ";
+            for (size_t i = 1; i < a.key.top3.size(); ++i)
+                analysisStatus << theory::camelot (a.key.top3[i].key) << (i + 1 < a.key.top3.size() ? ", " : "");
+        }
+        analysisStatus << "\nTempo: " << juce::String (a.rhythm.bpm, 2) << " BPM"
+                       << (a.rhythm.fixedTempo ? " (fixed grid)" : "") << ", " << (int) a.rhythm.bars.size() << " bars";
+        if (keyDetector.warning.isNotEmpty())
+            analysisStatus << "\n" << keyDetector.warning;
+    }
     updateStatus();
 }
 
@@ -154,6 +179,8 @@ void MainComponent::updateStatus()
 
     if (importStatus.isNotEmpty())
         text << importStatus << "\n";
+    if (analysisStatus.isNotEmpty())
+        text << analysisStatus << "\n";
 
     statusLabel.setText (text, juce::dontSendNotification);
 }

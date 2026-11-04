@@ -21,3 +21,11 @@ if(JAUDIOS_RT_CHECK)
         target_link_options(jaudios_rt_tests PRIVATE -rdynamic) # readable JAUDIOS_RT_BACKTRACE output
     endif()
 endif()
+
+# Golden tests against ml/tests/goldens.json. Missing fixtures are rendered first (never overwritten).
+add_executable(jaudios_golden_tests TestMain.cpp golden/test_goldens.cpp)
+target_link_libraries(jaudios_golden_tests PRIVATE Catch2::Catch2 app_core test_support jaudios_warnings)
+add_test(NAME render_missing_fixtures COMMAND fixture-render ${PROJECT_SOURCE_DIR}/tests/fixtures)
+set_tests_properties(render_missing_fixtures PROPERTIES FIXTURES_SETUP golden_audio)
+catch_discover_tests(jaudios_golden_tests DISCOVERY_MODE PRE_TEST
+                     PROPERTIES FIXTURES_REQUIRED golden_audio)
