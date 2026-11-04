@@ -88,8 +88,10 @@ record next to it matches the file, comes from the pinned upstream commit and ch
 records a passing parity check (max |Δlogits| < 1e-4). Keep the two files together when you copy
 the model anywhere. The app logs "verified local export from darwin-arm64" when it loads one.
 
-The export runs PyTorch, onnxsim and ONNX Runtime in separate processes. Loading them into one
-process segfaulted on Apple Silicon.
+onnxsim 0.6.5 (the graph simplifier) segfaults on Apple Silicon. The export detects that,
+prints a warning, and uses the unsimplified graph instead: for this model it has the same ops and
+bit-identical weights, and the parity check still runs. The provenance record then says
+`"simplified": false`.
 
 **Alternative:** every CI run uploads a verified model (with its provenance record) as the
 `openkeyscan3-onnx` artifact. With the GitHub CLI:
@@ -191,6 +193,7 @@ Signing and notarizing the sidecar is covered by the packaging-and-release skill
 | `Library not loaded: @rpath/libonnxruntime.1.19.2.dylib` | Re-configure and rebuild; the dylib is staged under its install name in `build/onnxruntime/lib/` and copied into the app bundle. |
 | Key backend is `chroma` with "model not found" | Export the model (section 3) or set `JAUDIOS_MODELS_DIR`. |
 | "key model sha256 mismatch … not a verified local export" | The model has no valid `openkeyscan3.onnx.provenance.json` next to it (copied without it, modified, or left behind by a failed export). Re-run the export in section 3, or copy both files. |
-| Export dies with `SIGSEGV` | Fixed by running the export stages in separate processes. If it happens again, run `python ml/tests/export_probe.py <raw.onnx> <model.onnx>` with the ML environment's Python to see which library combination crashes, and report it. |
+| "WARNING: onnxsim crashed (SIGSEGV)" during the export | Expected on Apple Silicon; the export continues with the unsimplified graph (see section 3). |
+| The export dies with `SIGSEGV` in another stage | Run `python ml/tests/export_probe.py <raw.onnx> <model.onnx>` with the ML environment's Python to see which library crashes, and report it. |
 | CMake picks `osx-x64` / the app runs under Rosetta | You are using x86_64 tools; see the `uname -m` check in section 1. |
 | `cmake: CMake 3.25 or higher is required` | `brew upgrade cmake`. |

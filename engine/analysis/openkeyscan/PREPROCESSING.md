@@ -105,3 +105,6 @@ Server = `openkeyscan_analyzer_server.py` @ pinned commit in a Python 3.12 venv 
   default on macOS too; `[onnx][coreml][!mayfail]` keeps measuring it.
 - Not yet run: GiantSteps subset (MIREX ≥ 0.80).
   Phase A stays until those pass (skill: "Keep Phase A code until Phase B passes acceptance").
+- Export on macOS arm64: onnxsim 0.6.5 segfaults (even alone; `ml/tests/export_probe.py`, macos-15 CI). For this
+  model onnxsim is a no-op: the raw export already has BatchNorm fused into Conv and the same 23 ops with
+  bit-identical weights. The export falls back to the raw graph and records `"simplified": false`.

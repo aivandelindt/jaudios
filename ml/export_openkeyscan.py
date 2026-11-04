@@ -16,9 +16,13 @@ The three stages run in separate processes, each loading only the native librari
   1. torch      : export the raw graph + PyTorch reference logits on the fixtures (-> .npz)
   2. onnxsim    : simplify + check the graph (onnx / onnxsim, no torch)
   3. onnxruntime: parity of the simplified model against the saved logits (no torch)
-Loading torch together with the onnx / onnxsim / onnxruntime wheels in one process segfaulted on
-macOS arm64 (each wheel bundles its own native protobuf / onnx code); on Linux it happened to work.
 The orchestrating process imports none of them.
+
+onnxsim 0.6.5 segfaults on macOS arm64 even on its own (export_probe.py, macos-15 CI). For this
+model it is numerically a no-op: torch.onnx.export already fuses BatchNorm into Conv in eval mode,
+and the raw and simplified graphs have the same 23 ops and bit-identical weights. So if the
+simplify stage dies on a signal, the raw graph is validated (onnx.checker) and used instead; parity
+is checked either way, and the provenance records "simplified": false.
 """
 import argparse, datetime, hashlib, json, platform, subprocess, sys, tempfile
 from pathlib import Path
@@ -71,6 +75,17 @@ def stage_simplify(raw: Path, out: Path):
           f"nodes={len(simplified.graph.node)}", flush=True)
 
 
+def stage_check(raw: Path, out: Path):
+    """Fallback when onnxsim crashes: validate the raw graph and use it unchanged."""
+    import onnx
+
+    model = onnx.load(str(raw))
+    onnx.checker.check_model(model)
+    onnx.save(model, str(out))
+    print(f"[onnx] using the unsimplified graph: opset {OPSET}, onnx {onnx.__version__}, nodes={len(model.graph.node)}",
+          flush=True)
+
+
 def stage_parity(out: Path, refs: Path, result: Path, fixtures):
     import numpy as np
     import onnxruntime as ort
@@ -92,11 +107,17 @@ def stage_parity(out: Path, refs: Path, result: Path, fixtures):
     result.write_text(json.dumps({"worst": worst, "fixtures": len(fixtures), "onnxruntime": ort.__version__}))
 
 
-def run_stage(*args):
+def run_stage(*args, allow_crash=False):
+    """Runs one stage in a fresh process. With allow_crash, a death by signal returns the signal
+    name instead of aborting the export (any other failure still aborts)."""
     cmd = [sys.executable, str(Path(__file__).resolve()), "--stage", *map(str, args)]
     result = subprocess.run(cmd)
+    if result.returncode < 0 and allow_crash:
+        import signal
+        return signal.Signals(-result.returncode).name
     if result.returncode != 0:
         sys.exit(f"stage {args[0]} failed (exit {result.returncode})")
+    return None
 
 
 def main():
@@ -112,6 +133,8 @@ def main():
             return stage_torch(Path(rest[0]), Path(rest[1]), rest[2:])
         if name == "simplify":
             return stage_simplify(Path(rest[0]), Path(rest[1]))
+        if name == "check":
+            return stage_check(Path(rest[0]), Path(rest[1]))
         if name == "parity":
             return stage_parity(Path(rest[0]), Path(rest[1]), Path(rest[2]), rest[3:])
         sys.exit(f"unknown stage {name}")
@@ -129,7 +152,12 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         raw, refs, parity = Path(tmp) / "raw.onnx", Path(tmp) / "refs.npz", Path(tmp) / "parity.json"
         run_stage("torch", raw, refs, *args.fixtures)
-        run_stage("simplify", raw, out)
+        crash = run_stage("simplify", raw, out, allow_crash=True)
+        if crash:
+            print(f"WARNING: onnxsim crashed ({crash}); using the unsimplified graph "
+                  "(same ops, bit-identical weights for this model). Parity is still checked.", flush=True)
+            out.unlink(missing_ok=True)
+            run_stage("check", raw, out)
         run_stage("parity", out, refs, parity, *args.fixtures)
         checked = json.loads(parity.read_text())
 
@@ -141,6 +169,8 @@ def main():
         "sha256": sha,
         "size": len(data),
         "matches_manifest": sha == openkeyscan_source.MANIFEST["openkeyscan3_onnx"]["sha256"],
+        "simplified": crash is None,
+        **({"simplify_note": f"onnxsim crashed ({crash}); unsimplified graph used"} if crash else {}),
         "parity_max_abs_logits": checked["worst"],
         "parity_threshold": PARITY,
         "argmax_match": True,

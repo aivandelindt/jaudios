@@ -18,6 +18,10 @@
   onnx/onnxsim simplify; onnxruntime parity), so torch never shares a process with the onnx / onnxsim /
   onnxruntime native libraries; addresses the macOS arm64 export segfault. Output unchanged on Linux (same sha256).
   `ml/tests/export_probe.py` reports which library combination crashes, one process per case.
+- Fix (found by the macOS export probe): onnxsim 0.6.5 segfaults on macOS arm64 even on its own. For this model it
+  is a no-op (raw `torch.onnx.export` graph: same 23 ops, bit-identical weights), so when the simplify stage dies on
+  a signal the export validates and uses the raw graph; parity is still checked; provenance records
+  `"simplified": false`. On Linux nothing changes (onnxsim still runs, same sha256).
 - Model acceptance: exports are not byte-reproducible across machines (onnxsim folds constants with CPU-specific ORT
   kernels; a GitHub Linux x86-64 runner produced a different sha256 with the same pins). `ml/export_openkeyscan.py`
   now writes `openkeyscan3.onnx.provenance.json`; `KeyDetectorOnnx` and `tools/models.py` accept a model whose sha256
