@@ -5,8 +5,7 @@ same on an M1 through M5. Intel Macs and universal (arm64 + x86_64) builds are n
 
 > Verification status: these steps are exercised on every PR by the
 > [macOS (Apple Silicon) workflow](../.github/workflows/macos.yml) on GitHub's `macos-15` arm64
-> runners (macOS 15, Xcode 16.4). That runner is a VM, so it does not have the Neural Engine;
-> check CoreML performance on a real Mac.
+> runners (macOS 15, Xcode 16.4).
 
 ## 1. Prerequisites
 
@@ -112,9 +111,10 @@ To use it outside the build tree:
 mkdir -p ~/Library/Application\ Support/JAudios/models && cp build/models/openkeyscan3.onnx build/models/openkeyscan3.onnx.provenance.json ~/Library/Application\ Support/JAudios/models/
 ```
 
-On Apple Silicon the model runs through ONNX Runtime's CoreML execution provider, falling back to
-the CPU if CoreML is unavailable. Run with `JAUDIOS_LOG_LEVEL=debug` to see which provider was
-used.
+The model runs on ONNX Runtime's CPU execution provider (about 40 ms per track). The CoreML
+provider is off: with ONNX Runtime 1.19.2 it runs only part of this model and returns wrong keys
+(found by the macOS CI golden test). `JAUDIOS_ONNX_COREML=1` turns it on for investigation only.
+Run with `JAUDIOS_LOG_LEVEL=debug` to see the provider and load timings.
 
 ## 4. Run
 

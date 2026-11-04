@@ -12,7 +12,11 @@ namespace jaudios::analysis::openkeyscan
 struct OnnxConfig
 {
     juce::File modelFile;              // openkeyscan3.onnx (sha256 checked against models/manifest.json)
-    bool preferCoreML = true;          // macOS: CoreML EP first, CPU fallback
+    // macOS CoreML execution provider: OFF by default. With ONNX Runtime 1.19.2 it accepts only
+    // 14 of the model's 23 nodes (10 partitions) and the result is wrong: logits off by 3-5 and a
+    // different key on 2 of 5 fixtures (macos-15 arm64 CI). CPU inference is ~40 ms per track.
+    // Opt in with JAUDIOS_ONNX_COREML=1 only to investigate; the golden test catches the error.
+    bool preferCoreML = false;
     double ensembleBelowSec = 30.0;    // shorter inputs also run chroma (skill ensemble rule)
 };
 

@@ -96,3 +96,49 @@ TEST_CASE ("Phase B pipeline (C++ CQT + ORT) matches PyTorch on librosa input", 
     CHECK (argGot == argRef); // Phase B argmax == Phase A (same weights, same server preprocessing)
     CHECK (maxDiff < 1e-2f);  // CQT drift (<1e-5) propagated through the network
 }
+
+// CoreML execution provider (macOS only). [!mayfail]: with ONNX Runtime 1.19.2 CoreML accepts 14
+// of 23 nodes and returns wrong logits (off by 3-5, different key on 2 of 5 fixtures), which is
+// why KeyDetectorOnnx uses the CPU provider by default. Kept so an ORT upgrade that fixes it shows.
+TEST_CASE ("Phase B pipeline with the CoreML execution provider matches PyTorch", "[onnx][coreml][golden][!mayfail]")
+{
+   #if ! JUCE_MAC
+    SKIP ("CoreML is macOS only");
+   #else
+    const char* names[] = { "house_124_Amin", "techno_132_Fmin", "pop_100_Cmaj", "loop_8bar_Gmaj", "stem_bass_Dmin" };
+    const auto name = juce::String (names[GENERATE (0, 1, 2, 3, 4)]);
+
+    const auto refFile = juce::File (JAUDIOS_CQT_REFERENCE_DIR).getChildFile (name + ".logits.npy");
+    const auto wav = juce::File (JAUDIOS_SOURCE_DIR).getChildFile ("tests/fixtures/" + name + ".wav");
+    const auto model = juce::File (JAUDIOS_DEV_MODELS_DIR).getChildFile ("openkeyscan3.onnx");
+    if (! refFile.existsAsFile() || ! wav.existsAsFile() || ! model.existsAsFile())
+        SKIP ("needs JAUDIOS_ML_PYTHON references and build/models/openkeyscan3.onnx");
+
+    const auto ref = test::readNpy (refFile);
+    REQUIRE (ref.has_value());
+    const analysis::AudioImporter importer;
+    const auto imported = importer.importFile (wav);
+    REQUIRE (imported.ok());
+
+    analysis::openkeyscan::OnnxConfig config;
+    config.modelFile = model;
+    config.preferCoreML = true;
+    analysis::openkeyscan::KeyDetectorOnnx detector (config);
+    REQUIRE (detector.isReady());
+    REQUIRE (detector.executionProvider() == "CoreML");
+
+    const auto logits = detector.logitsFor (imported.capture->buffer, imported.capture->sampleRate);
+    REQUIRE (logits.has_value());
+    float maxDiff = 0.0f;
+    int argRef = 0, argGot = 0;
+    for (int i = 0; i < 24; ++i)
+    {
+        maxDiff = std::max (maxDiff, std::abs ((*logits)[(size_t) i] - ref->data[(size_t) i]));
+        if (ref->data[(size_t) i] > ref->data[(size_t) argRef]) argRef = i;
+        if ((*logits)[(size_t) i] > (*logits)[(size_t) argGot]) argGot = i;
+    }
+    INFO (name << " [CoreML]: class PyTorch " << argRef << " / CoreML " << argGot << ", max |dlogits| = " << maxDiff);
+    CHECK (argGot == argRef);
+    CHECK (maxDiff < 1e-2f);
+   #endif
+}

@@ -24,6 +24,9 @@
   differs from the manifest only if that record matches the file, the pinned upstream commit + checkpoint, and a
   passing parity check (< 1e-4). The app logs "verified local export from <platform>"; `modelOrigin()` reports it.
 - CI: the macOS job exports the model on the Mac and requires the app to load it (backend onnx).
+- Fix (found by the macOS golden test): the CoreML execution provider returned wrong logits (off by 3-5, different
+  key on 2 of 5 fixtures) with ONNX Runtime 1.19.2, running only 14 of 23 nodes. `KeyDetectorOnnx` now uses the CPU
+  provider on macOS too; `JAUDIOS_ONNX_COREML=1` opts in for investigation; `[onnx][coreml][!mayfail]` tracks it.
 - Docs: `docs/building-macos.md`.
 - Test: the ONNX session-creation timing is measured after one warm-up construction (the first one also pays for
   loading the dylib and a cold disk cache, which flaked right after a rebuild).
