@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### macOS (Apple Silicon)
+- Fix: on macOS the ONNX Runtime dylib was staged as `libonnxruntime.dylib`, but its install name is
+  `@rpath/libonnxruntime.1.19.2.dylib`, so every binary using it would have failed to launch ("Library not
+  loaded"). It is now staged and bundled under its install name.
+- CI: `.github/workflows/macos.yml` builds and tests on GitHub's `macos-15` arm64 runners (Release build, ML env
+  from the manifest pins, ONNX export, full ctest incl. CQT/ONNX goldens, app bundle checks, CLI run, rt_check).
+- Docs: `docs/building-macos.md`.
+- Test: the ONNX session-creation timing is measured after one warm-up construction (the first one also pays for
+  loading the dylib and a cold disk cache, which flaked right after a rebuild).
+
 ### key-detection-openkeyscan Phase B (native ONNX)
 - `ml/export_openkeyscan.py`: upstream `eval.load_model()` (pinned checkout via `ml/openkeyscan_source.py`) →
   `torch.onnx.export` (opset 17, dynamic time axis, input `cqt` (1,1,105,T) → `logits` (1,24)) → onnxsim.

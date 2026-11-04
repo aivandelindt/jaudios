@@ -37,12 +37,18 @@ if(NOT EXISTS "${_ort_native}/${_ort_lib_name}")
     message(FATAL_ERROR "ONNX Runtime package has no ${_ort_rid} library at ${_ort_native}")
 endif()
 
-# Stage the library under the name the loader will look for (Linux SONAME libonnxruntime.so.1).
+# Stage the library under the name the loader will look for: the Linux SONAME
+# (libonnxruntime.so.1) or the macOS install name (@rpath/libonnxruntime.<version>.dylib). Linked
+# binaries record that name, so a file staged under any other name fails to load at launch.
 set(JAUDIOS_ORT_LIB_DIR "${PROJECT_BINARY_DIR}/onnxruntime/lib")
 file(MAKE_DIRECTORY "${JAUDIOS_ORT_LIB_DIR}")
 if(UNIX AND NOT APPLE)
     file(COPY_FILE "${_ort_native}/${_ort_lib_name}" "${JAUDIOS_ORT_LIB_DIR}/libonnxruntime.so.1" ONLY_IF_DIFFERENT)
     set(_ort_location "${JAUDIOS_ORT_LIB_DIR}/libonnxruntime.so.1")
+elseif(APPLE)
+    set(_ort_install_name libonnxruntime.${JAUDIOS_ORT_VERSION}.dylib)
+    file(COPY_FILE "${_ort_native}/${_ort_lib_name}" "${JAUDIOS_ORT_LIB_DIR}/${_ort_install_name}" ONLY_IF_DIFFERENT)
+    set(_ort_location "${JAUDIOS_ORT_LIB_DIR}/${_ort_install_name}")
 else()
     file(COPY_FILE "${_ort_native}/${_ort_lib_name}" "${JAUDIOS_ORT_LIB_DIR}/${_ort_lib_name}" ONLY_IF_DIFFERENT)
     set(_ort_location "${JAUDIOS_ORT_LIB_DIR}/${_ort_lib_name}")

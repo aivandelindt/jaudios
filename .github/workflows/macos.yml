@@ -1,0 +1,83 @@
+# macOS / Apple Silicon is the product target (AGENTS.md). This job builds and tests JAudios on a
+# GitHub-hosted arm64 Mac so every PR is checked on the real platform, including the CoreML
+# execution provider and the app bundle layout.
+name: macOS (Apple Silicon)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: macos-15 # arm64 (Apple Silicon)
+    timeout-minutes: 120
+    env:
+      ML_VENV: ${{ github.workspace }}/../jaudios-ml-venv
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          uname -m
+          sw_vers
+          xcodebuild -version
+          cmake --version
+          brew install ninja
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache ML env
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.ML_VENV }}
+          key: ml-venv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('models/manifest.json') }}
+
+      - name: ML env (pins from models/manifest.json)
+        run: |
+          [ -x "$ML_VENV/bin/python" ] || python3.12 -m venv "$ML_VENV"
+          PINS=$(python3 -c "import json; m=json.load(open('models/manifest.json')); p={**m['openkeyscan_sidecar']['build']['pins'], **m['openkeyscan3_onnx']['export']['pins']}; print(' '.join(f'{k}=={v}' for k,v in p.items() if k not in ('python','pyinstaller','pyinstaller-hooks-contrib')))")
+          echo "$PINS"
+          "$ML_VENV/bin/pip" install -q $PINS tqdm
+
+      - name: Configure (Release)
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DJAUDIOS_ML_PYTHON="$ML_VENV/bin/python"
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Render fixtures
+        run: cmake --build build --target fixtures
+
+      - name: Export ONNX model (parity-checked)
+        # Non-fatal on purpose for now: a sha256 that differs from the Linux-pinned one is itself a
+        # finding (onnxsim constant folding on arm64), and the remaining steps should still report.
+        continue-on-error: true
+        run: python3 tools/models.py --only onnx --python "$ML_VENV/bin/python"
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: App bundle layout
+        run: |
+          APP=build/app/JAudios_artefacts/Release/JAudios.app
+          ls -la "$APP/Contents/MacOS" "$APP/Contents/Frameworks"
+          otool -L "$APP/Contents/MacOS/JAudios" | grep -i onnxruntime
+          otool -l "$APP/Contents/MacOS/JAudios" | grep -A2 LC_RPATH
+          codesign --verify --verbose "$APP" || true # linker ad-hoc signature; Developer ID signing is packaging's job
+
+      - name: CLI on the fixture (default backend, debug log)
+        run: |
+          CLI=build/tools/cli/app-cli_artefacts/Release/app-cli
+          JAUDIOS_LOG_LEVEL=debug "$CLI" analyze tests/fixtures/house_124_Amin.wav
+          KEY_BACKEND=chroma "$CLI" analyze tests/fixtures/house_124_Amin.wav | head -40
+
+      - name: Realtime check
+        run: tools/rt_check.sh

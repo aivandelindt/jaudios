@@ -52,6 +52,10 @@ TEST_CASE ("ONNX detector loads the model and is fast to create", "[onnx]")
     OnnxConfig config;
     config.modelFile = devModel();
 
+    // Warm-up: the first construction in a process also pays one-off costs (loading the ONNX
+    // Runtime dylib, a cold disk cache for the 18.8 MB model on a fresh CI runner). Time the second.
+    { KeyDetectorOnnx warmUp (config); }
+
     const auto t0 = juce::Time::getMillisecondCounterHiRes();
     KeyDetectorOnnx detector (config);
     const auto ms = juce::Time::getMillisecondCounterHiRes() - t0;
