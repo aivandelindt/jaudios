@@ -6,6 +6,9 @@
 - Fix: on macOS the ONNX Runtime dylib was staged as `libonnxruntime.dylib`, but its install name is
   `@rpath/libonnxruntime.1.19.2.dylib`, so every binary using it would have failed to launch ("Library not
   loaded"). It is now staged and bundled under its install name.
+- Fix (found by the first macOS CI run): `rt::isTrapInstalled()` used a weak undefined symbol, which Apple's linker
+  rejects ("Undefined symbols: _jaudios_rt_trap_installed"), so `app-cli` and `jaudios_tests` did not link on macOS.
+  The trap now registers itself from a static initializer in RealtimeTrapHooks.cpp.
 - CI: `.github/workflows/macos.yml` builds and tests on GitHub's `macos-15` arm64 runners (Release build, ML env
   from the manifest pins, ONNX export, full ctest incl. CQT/ONNX goldens, app bundle checks, CLI run, rt_check).
 - Docs: `docs/building-macos.md`.

@@ -48,6 +48,7 @@ namespace detail
     void countAllocation() noexcept;
     void countDeallocation() noexcept;
     void countMutexLock() noexcept;
+    void markTrapInstalled() noexcept; // called by RealtimeTrapHooks.cpp at static-init time
 }
 
 } // namespace jaudios::rt

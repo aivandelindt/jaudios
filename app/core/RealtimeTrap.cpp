@@ -57,9 +57,19 @@ namespace detail
 
 } // namespace jaudios::rt
 
-#if defined(__GNUC__) || defined(__clang__)
-extern "C" __attribute__ ((weak)) int jaudios_rt_trap_installed;
-bool jaudios::rt::isTrapInstalled() noexcept { return &jaudios_rt_trap_installed != nullptr; }
-#else
-bool jaudios::rt::isTrapInstalled() noexcept { return false; }
-#endif
+// Set by RealtimeTrapHooks.cpp's static initializer, which only rt_check binaries link. (A weak
+// undefined symbol would be simpler, but Apple's linker rejects it when nothing defines it.)
+namespace jaudios::rt
+{
+namespace
+{
+    std::atomic<bool> trapInstalled { false };
+}
+
+bool isTrapInstalled() noexcept { return trapInstalled.load(); }
+
+namespace detail
+{
+    void markTrapInstalled() noexcept { trapInstalled = true; }
+}
+} // namespace jaudios::rt
