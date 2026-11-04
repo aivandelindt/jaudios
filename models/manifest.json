@@ -12,23 +12,69 @@
     "size": 18830452,
     "sha256": "5610691be2b3aa21764c5978ca0c2524fcdbf600f09dcbda6c2da937745db600"
   },
+  "openkeyscan3_onnx": {
+    "phase": "B (M2)",
+    "export": {
+      "script": "ml/export_openkeyscan.py",
+      "from": "openkeyscan3_pt",
+      "opset": 17,
+      "io": "cqt float32 (1, 1, 105, time) -> logits float32 (1, 24)",
+      "pins": {
+        "python": "3.12",
+        "torch": "2.2.2",
+        "onnx": "1.16.2",
+        "onnxsim": "0.6.5",
+        "onnxruntime": "1.19.2",
+        "numpy": "1.26.4",
+        "librosa": "0.11.0"
+      },
+      "parity": "PyTorch vs ORT CPU max |dlogits| < 1e-4 (measured 1.43e-06 on the 5 fixtures)"
+    },
+    "file": "openkeyscan3.onnx",
+    "size": 18795653,
+    "sha256": "2762d4a06f095a2d74372f1ab581f9cba154ac556f0fa89f09aa2d27fc6f53ff",
+    "url": null,
+    "note": "Export is deterministic (same sha256 on re-export). url stays null until the file is hosted somewhere we control."
+  },
   "openkeyscan_sidecar": {
     "phase": "A (M1 only; removed in M2, see packaging-and-release M2 removal checklist)",
     "build": {
       "script": "ml/sidecar/build_openkeyscan_sidecar.sh",
       "python": "3.12",
       "pins": {
-        "torch": "2.2.2", "numpy": "1.26.4", "librosa": "0.11.0", "soundfile": "0.13.1", "av": "16.1.0",
-        "scipy": "1.17.1", "numba": "0.64.0", "llvmlite": "0.46.0", "scikit-learn": "1.8.0",
-        "soxr": "1.0.0", "audioread": "3.1.0", "pyinstaller": "6.19.0", "pyinstaller-hooks-contrib": "2026.2"
+        "torch": "2.2.2",
+        "numpy": "1.26.4",
+        "librosa": "0.11.0",
+        "soundfile": "0.13.1",
+        "av": "16.1.0",
+        "scipy": "1.17.1",
+        "numba": "0.64.0",
+        "llvmlite": "0.46.0",
+        "scikit-learn": "1.8.0",
+        "soxr": "1.0.0",
+        "audioread": "3.1.0",
+        "pyinstaller": "6.19.0",
+        "pyinstaller-hooks-contrib": "2026.2"
       }
     },
     "unpack_to": "build/sidecar/openkeyscan-analyzer",
     "artifacts": {
-      "darwin-arm64":   { "url": null, "sha256": null },
-      "darwin-x86_64":  { "url": null, "sha256": null },
-      "linux-x86_64":   { "url": null, "sha256": null },
-      "windows-x86_64": { "url": null, "sha256": null }
+      "darwin-arm64": {
+        "url": null,
+        "sha256": null
+      },
+      "darwin-x86_64": {
+        "url": null,
+        "sha256": null
+      },
+      "linux-x86_64": {
+        "url": null,
+        "sha256": null
+      },
+      "windows-x86_64": {
+        "url": null,
+        "sha256": null
+      }
     },
     "artifacts_note": "url/sha256 stay null until a built zip is published somewhere we control (or an upstream release asset is pinned). `make models` then downloads + verifies; until then it uses the zip produced by the build script."
   }

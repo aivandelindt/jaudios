@@ -32,6 +32,9 @@ if(JAUDIOS_BUILD_APP)
         gui/WaveformView.cpp)
 
     target_link_libraries(JAudios PRIVATE app_core jaudios_warnings)
+    if(JAUDIOS_WITH_ONNXRUNTIME)
+        jaudios_copy_onnxruntime(JAudios)
+    endif()
 endif()
 
 # Phase A: bundle the OpenKeyScan sidecar unpacked by `make models` (build/sidecar/openkeyscan-analyzer).

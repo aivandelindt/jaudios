@@ -2,6 +2,9 @@
 juce_add_console_app(app-cli PRODUCT_NAME "app-cli")
 target_sources(app-cli PRIVATE main.cpp)
 target_link_libraries(app-cli PRIVATE app_core jaudios_warnings)
+if(JAUDIOS_WITH_ONNXRUNTIME)
+    jaudios_copy_onnxruntime(app-cli)
+endif()
 
 # Instrumented build used by tools/rt_check.sh.
 if(JAUDIOS_RT_CHECK)

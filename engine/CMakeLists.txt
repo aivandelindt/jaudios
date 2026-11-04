@@ -22,7 +22,17 @@ jaudios_engine_lib(engine_theory     SOURCES ${ENGINE_THEORY_SOURCES})
 jaudios_engine_lib(engine_analysis   SOURCES ${ENGINE_ANALYSIS_SOURCES} DEPS engine_theory jaudios_juce)
 # Dev location of the OpenKeyScan sidecar unpacked by `make models` (see models/manifest.json).
 target_compile_definitions(engine_analysis PRIVATE
-    JAUDIOS_DEV_SIDECAR_DIR="${PROJECT_BINARY_DIR}/sidecar/openkeyscan-analyzer")
+    JAUDIOS_DEV_SIDECAR_DIR="${PROJECT_BINARY_DIR}/sidecar/openkeyscan-analyzer"
+    JAUDIOS_DEV_MODELS_DIR="${PROJECT_BINARY_DIR}/models")
+
+# Phase B: ONNX Runtime + the model's expected sha256 from models/manifest.json.
+file(READ "${PROJECT_SOURCE_DIR}/models/manifest.json" _manifest)
+string(JSON _onnx_sha GET "${_manifest}" openkeyscan3_onnx sha256)
+target_compile_definitions(engine_analysis PRIVATE JAUDIOS_OPENKEYSCAN_ONNX_SHA256="${_onnx_sha}")
+if(JAUDIOS_WITH_ONNXRUNTIME)
+    target_link_libraries(engine_analysis PRIVATE onnxruntime::onnxruntime)
+    target_compile_definitions(engine_analysis PRIVATE JAUDIOS_HAS_ONNXRUNTIME=1)
+endif()
 
 jaudios_engine_lib(engine_generators DEPS engine_theory)
 jaudios_engine_lib(engine_synth      DEPS jaudios_juce)

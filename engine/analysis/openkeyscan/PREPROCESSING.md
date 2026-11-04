@@ -92,3 +92,13 @@ Server = `openkeyscan_analyzer_server.py` @ pinned commit in a Python 3.12 venv 
   loop 9A (exp. 9B), bass stem 8B (exp. 7A). Three are relative-key swaps: the synthetic loops are
   harmonically ambiguous by construction (e.g. Am-F-C-G = C major's vi-IV-I-V). These numbers say
   nothing about real-music accuracy; judge Phase A on real fixtures and the GiantSteps nightly.
+
+## Phase B status (2026-11-04)
+- Export: `ml/export_openkeyscan.py`, sha256 `2762d4a06f095a2d74372f1ab581f9cba154ac556f0fa89f09aa2d27fc6f53ff`,
+  105 frequency bins (not 104, see above), dynamic time axis.
+- C++ CQT (engine/dsp/CQT) vs this exact code path: max |Δ| 9.1e-6 after log1p (skill threshold 1e-3).
+- Our CQT + ORT vs PyTorch on librosa input: same argmax on all 5 fixtures, max |Δlogits| 7.6e-6.
+- With real scores, the model's runner-up is the expected key on every synthetic fixture it misses
+  (house 8B/8A 0.54/0.35, pop 8A/8B 0.54/0.41, loop 9A/9B, bass 8B/7A).
+- Not yet run: GiantSteps subset (MIREX ≥ 0.80), CoreML EP on Apple Silicon (built for, untested here).
+  Phase A stays until those pass (skill: "Keep Phase A code until Phase B passes acceptance").

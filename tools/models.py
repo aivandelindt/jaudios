@@ -48,13 +48,45 @@ def unpack(zip_path, dest):
     print(f"sidecar ready: {exe}")
 
 
+def ensure_onnx(manifest, build_dir, python):
+    """Phase B model: verify build/models/openkeyscan3.onnx, downloading or exporting it if needed."""
+    entry = manifest["openkeyscan3_onnx"]
+    dest = build_dir / "models" / entry["file"]
+    if dest.exists() and sha256(dest) == entry["sha256"]:
+        print(f"model ready: {dest}")
+        return 0
+    if entry.get("url"):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        urllib.request.urlretrieve(entry["url"], dest)
+    elif python:
+        fixtures = sorted(str(p) for p in (ROOT / "tests" / "fixtures").glob("*.wav"))
+        if not fixtures:
+            sys.exit("error: the parity check needs fixtures: cmake --build build --target fixtures")
+        subprocess.check_call([python, str(ROOT / "ml" / "export_openkeyscan.py"), "--out", str(dest), *fixtures])
+    else:
+        print(f"No {entry['file']} yet (manifest url is null). Export it with a Python 3.12 env holding the pins\n"
+              f"in models/manifest.json -> openkeyscan3_onnx.export.pins:\n"
+              f"  python3 tools/models.py --python /path/to/venv/bin/python")
+        return 1
+    got = sha256(dest)
+    if got != entry["sha256"]:
+        sys.exit(f"error: sha256 mismatch for {dest}: {got} != {entry['sha256']}")
+    print(f"model ready: {dest}")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--build-dir", default=str(ROOT / "build"))
     ap.add_argument("--build", action="store_true", help="build the sidecar from source if no artefact is available")
+    ap.add_argument("--python", help="Python 3.12 env with the export pins: export the ONNX model if missing")
+    ap.add_argument("--only", choices=["sidecar", "onnx"], help="handle just one artefact")
     args = ap.parse_args()
 
     manifest = json.loads((ROOT / "models" / "manifest.json").read_text())
+    onnx_status = 0 if args.only == "sidecar" else ensure_onnx(manifest, Path(args.build_dir), args.python)
+    if args.only == "onnx":
+        return onnx_status
     entry = manifest["openkeyscan_sidecar"]
     plat = platform_id()
     art = entry["artifacts"].get(plat)
