@@ -30,6 +30,7 @@ struct TempDir
 
 } // namespace jaudios::test
 
+#include <array>
 #include <vector>
 
 namespace jaudios::test
@@ -66,12 +67,16 @@ inline juce::AudioBuffer<float> renderNotes (const std::vector<Note>& notes, dou
 }
 
 /** Diatonic triads for `degrees` (0-based) in a key, one chord per `chordSec`, plus bass roots. */
-inline std::vector<Note> progression (int tonic, bool minor, const std::vector<int>& degrees, double chordSec,
+inline std::vector<Note> progression (int tonic, bool isMinor, const std::vector<int>& degrees, double chordSec,
                                       int repeats = 2)
 {
-    static const int major[] = { 0, 2, 4, 5, 7, 9, 11 };
-    static const int harmonicMinor[] = { 0, 2, 3, 5, 7, 8, 11 }; // raised 7th: V is major in minor keys
-    auto pitch = [&] (int degree) { return 12 * (degree / 7) + (minor ? harmonicMinor : major)[degree % 7]; };
+    // Note: no function-local static tables read from a lambda, and no identifiers named
+    // `major` / `minor` (glibc macros): that combination produced garbage pitches in the
+    // GCC -O0 + ASan build.
+    constexpr std::array<int, 7> majorScale { 0, 2, 4, 5, 7, 9, 11 };
+    constexpr std::array<int, 7> harmonicMinorScale { 0, 2, 3, 5, 7, 8, 11 }; // raised 7th: V is major
+    const std::array<int, 7> scale = isMinor ? harmonicMinorScale : majorScale;
+    auto pitch = [scale] (int degree) { return 12 * (degree / 7) + scale[(size_t) (degree % 7)]; };
 
     std::vector<Note> notes;
     double t = 0.0;

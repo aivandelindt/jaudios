@@ -33,3 +33,24 @@ if(JAUDIOS_BUILD_APP)
 
     target_link_libraries(JAudios PRIVATE app_core jaudios_warnings)
 endif()
+
+# Phase A: bundle the OpenKeyScan sidecar unpacked by `make models` (build/sidecar/openkeyscan-analyzer).
+# macOS: Contents/Resources/sidecar/ (ditto keeps symlinks/signatures); elsewhere: resources/sidecar/.
+option(JAUDIOS_BUNDLE_SIDECAR "Copy the key detection sidecar into the app bundle when present" ON)
+set(JAUDIOS_SIDECAR_DIR "${PROJECT_BINARY_DIR}/sidecar/openkeyscan-analyzer")
+if(JAUDIOS_BUILD_APP AND JAUDIOS_BUNDLE_SIDECAR)
+    if(EXISTS "${JAUDIOS_SIDECAR_DIR}")
+        if(APPLE)
+            add_custom_command(TARGET JAudios POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:JAudios>/Resources/sidecar"
+                COMMAND ditto "${JAUDIOS_SIDECAR_DIR}" "$<TARGET_BUNDLE_CONTENT_DIR:JAudios>/Resources/sidecar/openkeyscan-analyzer"
+                COMMENT "Bundling key detection sidecar")
+        else()
+            add_custom_command(TARGET JAudios POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_directory "${JAUDIOS_SIDECAR_DIR}" "$<TARGET_FILE_DIR:JAudios>/resources/sidecar/openkeyscan-analyzer"
+                COMMENT "Bundling key detection sidecar")
+        endif()
+    else()
+        message(STATUS "Key detection sidecar not found at ${JAUDIOS_SIDECAR_DIR}: run `make models` and re-configure to bundle it")
+    endif()
+endif()

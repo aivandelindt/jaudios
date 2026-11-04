@@ -74,8 +74,13 @@ juce::var toJson (const AnalysisResult& r, const CaptureResult& c, const juce::S
     k->setProperty ("low_confidence", r.key.lowConfidence);
     k->setProperty ("backend", juce::String (toString (r.key.backend)));
     k->setProperty ("scores_available", r.key.scoresAvailable);
-    if (keyWarning.isNotEmpty())
-        k->setProperty ("warning", keyWarning);
+    if (keyWarning.isNotEmpty() || r.key.warning.isNotEmpty())
+        k->setProperty ("warning", r.key.warning.isNotEmpty() ? r.key.warning : keyWarning);
+    if (r.key.ensembleChroma != nullptr && ! r.key.ensembleChroma->top3.empty())
+    {
+        k->setProperty ("ensemble_chroma", juce::String (theory::camelot (r.key.ensembleChroma->top3[0].key)));
+        k->setProperty ("chroma_agrees", r.key.chromaAgrees.value_or (false));
+    }
 
     juce::Array<juce::var> top3;
     for (const auto& cand : r.key.top3)

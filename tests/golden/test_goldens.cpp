@@ -40,12 +40,10 @@ TEST_CASE ("goldens.json is readable", "[golden]")
     REQUIRE (fixtures().size() >= 1);
 }
 
-TEST_CASE ("Golden fixtures: tempo, key, downbeat", "[golden]")
+namespace
 {
-    const auto all = fixtures();
-    REQUIRE_FALSE (all.empty());
-    const auto fixture = all[(size_t) GENERATE (range (0, 5))];
-
+void checkFixture (const juce::var& fixture, const juce::String& backend)
+{
     const auto file = sourceDir().getChildFile (fixture["file"].toString());
     if (! file.existsAsFile())
         SKIP ("fixture missing: " << file.getFullPathName() << " (cmake --build build --target fixtures)");
@@ -54,12 +52,14 @@ TEST_CASE ("Golden fixtures: tempo, key, downbeat", "[golden]")
     const auto imported = importer.importFile (file);
     REQUIRE (imported.ok());
 
-    AppConfig config; // PR CI backends: goldens.json key_backends_in_pr_ci == ["chroma"]
-    config.keyBackend = "chroma";
+    auto config = AppConfig::fromEnvironment();
+    config.keyBackend = backend;
     auto keyDetector = makeKeyDetector (config);
+    if (backend == "sidecar" && keyDetector.backend != KeyBackend::sidecar)
+        SKIP ("no key detection sidecar available: " << keyDetector.warning);
     const auto result = analyze (*imported.capture, *keyDetector.detector);
 
-    INFO (file.getFileName() << ": bpm " << result.rhythm.bpm << ", key " << theory::camelot (result.key.top3.at (0).key)
+    INFO ("[" << backend << "] " << file.getFileName() << ": bpm " << result.rhythm.bpm << ", key " << theory::camelot (result.key.top3.at (0).key)
                              << " (" << theory::traditionalName (result.key.top3[0].key) << "), margin " << result.key.margin);
 
     // --- tempo
@@ -79,8 +79,9 @@ TEST_CASE ("Golden fixtures: tempo, key, downbeat", "[golden]")
 
     if (allowFallback)
     {
-        const bool inTop2 = theory::camelot (result.key.top3[0].key) == expected.toStdString()
-                         || theory::camelot (result.key.top3[1].key) == expected.toStdString();
+        bool inTop2 = false;
+        for (size_t i = 0; i < std::min<size_t> (2, result.key.top3.size()); ++i)
+            inTop2 = inTop2 || theory::camelot (result.key.top3[i].key) == expected.toStdString();
         CHECK (inTop2);
     }
     else
@@ -88,6 +89,8 @@ TEST_CASE ("Golden fixtures: tempo, key, downbeat", "[golden]")
         CHECK (theory::camelot (result.key.top3[0].key) == expected.toStdString());
         CHECK (result.key.margin >= minMargin);
     }
+    if (backend == "sidecar")
+        CHECK (result.key.backend == KeyBackend::sidecar); // no silent fallback in the golden run
 
     // --- downbeat (synthetic fixtures carry exact ground truth)
     const auto truthFile = file.withFileExtension ("truth.json");
@@ -103,4 +106,22 @@ TEST_CASE ("Golden fixtures: tempo, key, downbeat", "[golden]")
             CHECK_THAT ((bars - std::round (bars)) * barSec, Catch::Matchers::WithinAbs (0.0, 0.010));
         }
     }
+}
+} // namespace
+
+// PR CI (goldens.json key_backends_in_pr_ci = ["chroma"])
+TEST_CASE ("Golden fixtures: tempo, key, downbeat", "[golden]")
+{
+    const auto all = fixtures();
+    REQUIRE (all.size() == 5);
+    checkFixture (all[(size_t) GENERATE (range (0, 5))], "chroma");
+}
+
+// Nightly (key_backends_in_nightly adds "sidecar"): runs whenever a sidecar is available
+// (`make models`, or OPENKEYSCAN_SIDECAR), otherwise SKIPs.
+TEST_CASE ("Golden fixtures with the key detection sidecar", "[golden][sidecar]")
+{
+    const auto all = fixtures();
+    REQUIRE (all.size() == 5);
+    checkFixture (all[(size_t) GENERATE (range (0, 5))], "sidecar");
 }

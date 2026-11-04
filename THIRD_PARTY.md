@@ -7,9 +7,31 @@
 | ONNX Runtime         | 1.19.x                      | MIT        | Microsoft Corporation                   | Inference                   |
 | Demucs (htdemucs)    | v4 weights                  | MIT        | Meta Platforms, Inc.                    | Stem separation             |
 | Basic Pitch          | ICASSP 2022 model           | Apache-2.0 | Spotify AB                              | Note transcription          |
-| OpenKeyScan analyzer | pinned release, see models/manifest.json | MIT | Alexander Sommer (rekordcloud) | Key detection (model + Phase A sidecar) |
+| OpenKeyScan analyzer | commit 6a2915f4 (models/manifest.json; no upstream tags) | MIT | Alexander Sommer (rekordcloud) | Key detection (model + Phase A sidecar). Built from source, not vendored; clone lives in ml/third_party/ (gitignored) |
 | MusicalKeyCNN        | upstream of OpenKeyScan     | MIT        | a1ex90                                  | Model architecture / training code lineage |
 | GiantSteps Key datasets | —                        | CC BY-NC-SA 4.0 (annotations) | Knees et al. / MTG | **Tests only, never shipped** |
+
+### Bundled inside the Phase A sidecar (M1 only; PyInstaller bundle, separate process, removed in M2)
+Pins from models/manifest.json (same as upstream build-linux-x64.sh / Pipfile.lock). Runs as its own
+executable; nothing below is linked into JAudios.
+
+| Component | Version | License | Note |
+|---|---|---|---|
+| CPython | 3.12 | PSF-2.0 | interpreter embedded by PyInstaller |
+| PyTorch | 2.2.2 | BSD-3-Clause | inference (Linux PyPI wheel also pulls NVIDIA CUDA runtime libs, NVIDIA EULA — the build script prefers the CPU-only wheel) |
+| NumPy | 1.26.4 | BSD-3-Clause | |
+| SciPy | 1.17.1 | BSD-3-Clause | |
+| librosa | 0.11.0 | ISC | CQT, audio loading |
+| soundfile / libsndfile | 0.13.1 | BSD-3-Clause / LGPL-2.1 (shared lib) | |
+| soxr (python-soxr / libsoxr) | 1.0.0 | LGPL-2.1 (shared lib) | resampling |
+| audioread | 3.1.0 | MIT | |
+| PyAV / FFmpeg | 16.1.0 | BSD-3-Clause / LGPL-2.1+ (shared libs) | compressed formats on Windows/Linux |
+| numba / llvmlite | 0.64.0 / 0.46.0 | BSD-2-Clause | librosa dependency |
+| scikit-learn | 1.8.0 | BSD-3-Clause | librosa dependency |
+| PyInstaller | 6.19.0 | GPL-2.0 **with bootloader exception** | build tool; the exception permits distributing the frozen app under any license |
+
+**Review before release:** the PyAV wheel's bundled FFmpeg build must be LGPL (not a GPL
+configuration); verify with `ffmpeg -L`/`av.library_versions` on the built bundle.
 
 ## Attribution text (shown in About → Credits)
 Key detection powered by OpenKeyScan (© Alexander Sommer, MIT License), based on

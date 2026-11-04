@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### key-detection-openkeyscan Phase A (sidecar)
+- `engine/analysis/openkeyscan`: `OpenKeyScanProtocol` (NDJSON parsing, class index ↔ key exactly as upstream
+  `camelot_output()`, request builder, device arguments), `SidecarProcess` (POSIX fork/exec with stdin/stdout/stderr
+  pipes: `juce::ChildProcess` cannot write to stdin; Windows not implemented yet → chroma), `KeyDetectorSidecar`
+  (lazy start on the Analysis thread, 20 s ready / 30 s request timeouts, kill + restart once then chroma fallback
+  with a warning, temp 44.1 kHz/16-bit mono WAV for `analyzeBuffer`, < 30 s ensemble with chroma, stderr → debug log).
+- Server returns argmax only: sidecar results have `scoresAvailable = false`, margin 1.0; GUI hides alternatives.
+- `KEY_BACKEND` default is now `auto` (sidecar when found, else chroma); `OPENKEYSCAN_SIDECAR[_ARGS]` override.
+- `models/manifest.json` (pinned commit + checkpoint sha256), `make models` (`tools/models.py`),
+  `ml/sidecar/build_openkeyscan_sidecar.sh` (PyInstaller build from the pinned source), CMake copies the sidecar
+  into `Contents/Resources/sidecar/` (macOS) or `resources/sidecar/`.
+- `PREPROCESSING.md` completed from the code: the model takes **105** bins (`[:, 0:-2]` drops two *time frames*),
+  `fmin` is exactly 65.0 Hz, and PyAV (Win/Linux compressed formats) peak-normalises while librosa does not.
+- Fake NDJSON server (`tests/fake_openkeyscan/fake_server.py`) for crash / hang / never-ready / error / noisy tests;
+  golden tests gain a `[golden][sidecar]` case that runs when a sidecar is available.
+- Fixed: test signal helper (and fixture renderer) read their scale tables through a lambda from function-local
+  statics named `major`, which produced garbage pitches under GCC -O0 + ASan (Debug-only flaky key test).
+
 ### key-and-tempo-analysis (key-detection-openkeyscan: chroma backend; tempo-and-beatgrid)
 - `engine/theory/Key`: key value type, Camelot / Open Key / traditional names + parsing (pure C++).
 - `engine/analysis/key`: `IKeyDetector`, `KeyResult {top3, margin, backend, scoresAvailable, lowConfidence}`,
