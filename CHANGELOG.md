@@ -14,6 +14,10 @@
 - CI: the key model is exported once on Linux (reproducing the manifest sha256) and handed to the macOS job as the
   `openkeyscan3-onnx` artifact, so macOS tests the shipped file. Exporting on macOS arm64 currently segfaults
   (second CI run); the macOS job keeps a non-fatal export attempt with faulthandler for diagnosis.
+- ml/export_openkeyscan.py runs its three stages in separate processes (torch export + reference logits;
+  onnx/onnxsim simplify; onnxruntime parity), so torch never shares a process with the onnx / onnxsim /
+  onnxruntime native libraries; addresses the macOS arm64 export segfault. Output unchanged on Linux (same sha256).
+  `ml/tests/export_probe.py` reports which library combination crashes, one process per case.
 - Docs: `docs/building-macos.md` (model via the CI artifact or a Linux export until the macOS export is fixed).
 - Test: the ONNX session-creation timing is measured after one warm-up construction (the first one also pays for
   loading the dylib and a cold disk cache, which flaked right after a rebuild).

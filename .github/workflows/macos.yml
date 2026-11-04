@@ -132,10 +132,16 @@ jobs:
       - name: Realtime check
         run: tools/rt_check.sh
 
-      - name: Diagnose a local macOS export (known to segfault; does not affect the tests above)
+      - name: macOS export (staged, isolated processes) + probe
+        # Non-fatal until it has passed on macOS: the probe reports which library combination, if
+        # any, still crashes; the staged export must reproduce the canonical sha256.
         continue-on-error: true
         env:
           PYTHONFAULTHANDLER: "1"
         run: |
+          "$ML_VENV/bin/python" ml/export_openkeyscan.py --stage torch "$RUNNER_TEMP/raw.onnx" "$RUNNER_TEMP/refs.npz" tests/fixtures/loop_8bar_Gmaj.wav || echo "::warning::torch stage failed"
+          RAW="$RUNNER_TEMP/raw.onnx"; [ -f "$RAW" ] || RAW=build/models/openkeyscan3.onnx
+          "$ML_VENV/bin/python" ml/tests/export_probe.py "$RAW" build/models/openkeyscan3.onnx
           "$ML_VENV/bin/python" ml/export_openkeyscan.py --out "$RUNNER_TEMP/mac-export.onnx" tests/fixtures/*.wav
           shasum -a 256 "$RUNNER_TEMP/mac-export.onnx" build/models/openkeyscan3.onnx
+          cmp "$RUNNER_TEMP/mac-export.onnx" build/models/openkeyscan3.onnx && echo "macOS export is byte-identical to the canonical model"
