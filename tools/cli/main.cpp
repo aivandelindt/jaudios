@@ -1,17 +1,21 @@
 // app-cli: headless harness. Every feature must work here before it gets UI.
 //
 //   app-cli info
-//   app-cli render  <audio-file> [--block N]   play the file through the engine graph offline
+//   app-cli import  <audio-file>                decode + resample to 44.1 kHz, print capture metadata
+//   app-cli render  <audio-file> [--block N]   play the imported file through the engine graph offline
 //   app-cli analyze <audio-file>                key / tempo / beat grid as JSON
 
 #include "app/core/AudioEngine.h"
 #include "app/core/OfflineRender.h"
 #include "app/core/RealtimeTrap.h"
+#include "engine/analysis/AudioImport.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_events/juce_events.h>
 
+#include <cmath>
 #include <iostream>
+#include <optional>
 
 namespace
 {
@@ -35,6 +39,7 @@ int usage()
 {
     std::cerr << "usage:\n"
                  "  app-cli info\n"
+                 "  app-cli import  <audio-file>\n"
                  "  app-cli render  <audio-file> [--block N]\n"
                  "  app-cli analyze <audio-file>\n";
     return 2;
@@ -61,30 +66,68 @@ int cmdInfo()
     return 0;
 }
 
-/** Scaffold-stage reader; replaced by engine/analysis AudioImport in the audio-capture step. */
-std::shared_ptr<juce::AudioBuffer<float>> readRaw (const juce::File& file, double& sampleRate)
+std::optional<jaudios::analysis::CaptureResult> importOrReport (const juce::File& file, double& importMs)
 {
-    juce::AudioFormatManager formats;
-    formats.registerBasicFormats();
-    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
-    if (reader == nullptr)
-        return nullptr;
+    const jaudios::analysis::AudioImporter importer;
+    const auto t0 = juce::Time::getMillisecondCounterHiRes();
+    auto result = importer.importFile (file);
+    importMs = juce::Time::getMillisecondCounterHiRes() - t0;
 
-    auto buffer = std::make_shared<juce::AudioBuffer<float>> ((int) reader->numChannels, (int) reader->lengthInSamples);
-    reader->read (buffer.get(), 0, (int) reader->lengthInSamples, 0, true, true);
-    sampleRate = reader->sampleRate;
-    return buffer;
+    if (! result.ok())
+        std::cerr << "error: " << result.error << "\n";
+
+    return std::move (result.capture);
+}
+
+var describeCapture (const jaudios::analysis::CaptureResult& c, double importMs)
+{
+    float peak = 0.0f;
+    double sumSquares = 0.0;
+    for (int ch = 0; ch < c.buffer.getNumChannels(); ++ch)
+    {
+        peak = std::max (peak, c.buffer.getMagnitude (ch, 0, c.buffer.getNumSamples()));
+        const float r = c.buffer.getRMSLevel (ch, 0, c.buffer.getNumSamples());
+        sumSquares += (double) r * r;
+    }
+    const double rms = std::sqrt (sumSquares / std::max (1, c.buffer.getNumChannels()));
+
+    return makeObject ({
+        { "file", c.sourceFile.getFullPathName() },
+        { "format", c.formatName },
+        { "original_sample_rate", c.originalSampleRate },
+        { "original_channels", c.originalNumChannels },
+        { "original_length_samples", c.originalLengthSamples },
+        { "resampled", c.originalSampleRate != c.sampleRate },
+        { "sample_rate", c.sampleRate },
+        { "channels", c.buffer.getNumChannels() },
+        { "length_samples", c.buffer.getNumSamples() },
+        { "duration_sec", c.durationSeconds() },
+        { "peak_dbfs", juce::Decibels::gainToDecibels (peak) },
+        { "rms_dbfs", juce::Decibels::gainToDecibels ((float) rms) },
+        { "import_ms", importMs },
+    });
+}
+
+int cmdImport (const juce::File& file)
+{
+    double importMs = 0.0;
+    const auto capture = importOrReport (file, importMs);
+    if (! capture)
+        return 1;
+
+    printJson (describeCapture (*capture, importMs));
+    return 0;
 }
 
 int cmdRender (const juce::File& file, int blockSize)
 {
-    double sampleRate = 0.0;
-    auto source = readRaw (file, sampleRate);
-    if (source == nullptr)
-    {
-        std::cerr << "error: cannot read " << file.getFullPathName() << "\n";
+    double importMs = 0.0;
+    auto capture = importOrReport (file, importMs);
+    if (! capture)
         return 1;
-    }
+
+    const double sampleRate = capture->sampleRate;
+    auto source = std::make_shared<const juce::AudioBuffer<float>> (std::move (capture->buffer));
 
     jaudios::AudioEngine engine;
     const auto t0 = juce::Time::getMillisecondCounterHiRes();
@@ -115,7 +158,7 @@ int cmdRender (const juce::File& file, int blockSize)
 
 int cmdAnalyze (const juce::File&)
 {
-    std::cerr << "analyze: not implemented yet (lands with audio-capture + key-and-tempo-analysis)\n";
+    std::cerr << "analyze: not implemented yet (lands with key-and-tempo-analysis)\n";
     return 3;
 }
 
@@ -142,6 +185,9 @@ int main (int argc, char** argv)
         std::cerr << "error: no such file: " << file.getFullPathName() << "\n";
         return 1;
     }
+
+    if (cmd == "import")
+        return cmdImport (file);
 
     if (cmd == "render")
     {

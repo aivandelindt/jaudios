@@ -28,7 +28,8 @@ if(JAUDIOS_BUILD_APP)
 
     target_sources(JAudios PRIVATE
         gui/Main.cpp
-        gui/MainComponent.cpp)
+        gui/MainComponent.cpp
+        gui/WaveformView.cpp)
 
     target_link_libraries(JAudios PRIVATE app_core jaudios_warnings)
 endif()
