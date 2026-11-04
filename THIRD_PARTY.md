@@ -2,7 +2,8 @@
 
 | Component            | Version / commit            | License    | Copyright                               | Used for                    |
 |----------------------|-----------------------------|------------|-----------------------------------------|-----------------------------|
-| JUCE                 | 8.x                         | AGPL/Commercial → **commercial license required before release** (tracked in #TBD) | Raw Material Software | App framework |
+| JUCE                 | 8.0.15 (FetchContent, pinned tag) | AGPL/Commercial → **commercial license required before release** (tracked in #TBD) | Raw Material Software | App framework |
+| Catch2               | v3.9.1 (FetchContent, pinned tag) | BSL-1.0 | Catch2 authors | Unit tests only, never shipped |
 | ONNX Runtime         | 1.19.x                      | MIT        | Microsoft Corporation                   | Inference                   |
 | Demucs (htdemucs)    | v4 weights                  | MIT        | Meta Platforms, Inc.                    | Stem separation             |
 | Basic Pitch          | ICASSP 2022 model           | Apache-2.0 | Spotify AB                              | Note transcription          |

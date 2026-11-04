@@ -34,3 +34,8 @@ Files read: preprocess_data.py, openkeyscan_analyzer.py, openkeyscan_analyzer_se
 | 23  | <fill>      |         |         |
 
 Golden: tests/fixtures/house_124_Amin.wav → A minor → 8A → 1m
+
+---
+Status (M1): **not started.** Phase A (sidecar) needs the OpenKeyScan analyzer bundle, which is not in
+the AGENTS.md stack table; it is waiting for dependency approval. Until then `makeKeyDetector` maps
+`KEY_BACKEND=sidecar|onnx` to the chroma backend and returns a warning.
