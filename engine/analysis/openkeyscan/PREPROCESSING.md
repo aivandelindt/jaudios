@@ -79,3 +79,16 @@ all 24 classes; the client also rejects a reply whose `camelot` disagrees with `
 | 11  | C#/Db minor | 12A     | 5m      |   | 23  | E major     | 12B     | 5d      |
 
 Golden: tests/fixtures/house_124_Amin.wav → A minor → 8A → 1m (class 7)
+
+## Phase A end-to-end check (2026-11-04, Linux x86-64, 4 vCPU, server run from source, CPU)
+Server = `openkeyscan_analyzer_server.py` @ pinned commit in a Python 3.12 venv with the manifest pins
+(PyPI torch 2.2.2+cu121 running on CPU), driven by `KeyDetectorSidecar` via
+`KEY_BACKEND=sidecar OPENKEYSCAN_SIDECAR=<venv>/bin/python OPENKEYSCAN_SIDECAR_ARGS=<server.py>`.
+- "ready": 3.0–4.8 s (skill target < 5 s). The very first run after `pip install` took ~25 s
+  (one-off bytecode/JIT cache warm-up) — a PyInstaller bundle should not show this, but check on a
+  clean Mac.
+- Per request: 0.12–0.48 s (librosa.load 0.13 s, CQT 0.18 s, inference 0.09 s on a 62 s file).
+- Keys on the **synthetic** fixtures: house 8B (exp. 8A), techno 4A ✓, pop 8A (exp. 8B),
+  loop 9A (exp. 9B), bass stem 8B (exp. 7A). Three are relative-key swaps: the synthetic loops are
+  harmonically ambiguous by construction (e.g. Am-F-C-G = C major's vi-IV-I-V). These numbers say
+  nothing about real-music accuracy; judge Phase A on real fixtures and the GiantSteps nightly.
