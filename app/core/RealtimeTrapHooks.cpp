@@ -11,7 +11,8 @@
 #include <cstdlib>
 #include <new>
 
-extern "C" { int jaudios_rt_trap_installed = 1; }
+// Registers the trap before main() runs, so rt::isTrapInstalled() is true in this binary only.
+static const bool trapRegistered = (jaudios::rt::detail::markTrapInstalled(), true);
 
 using namespace jaudios::rt::detail;
 

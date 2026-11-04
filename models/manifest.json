@@ -34,7 +34,7 @@
     "size": 18795653,
     "sha256": "2762d4a06f095a2d74372f1ab581f9cba154ac556f0fa89f09aa2d27fc6f53ff",
     "url": null,
-    "note": "Export is deterministic (same sha256 on re-export). url stays null until the file is hosted somewhere we control."
+    "note": "sha256 identifies the reference export (made on the dev machine). Exports are NOT byte-reproducible across machines: onnxsim folds constants with CPU-specific ONNX Runtime kernels (a GitHub Linux x86-64 runner produced a7a57a41..., same pins, same parity). The app and tools/models.py therefore also accept any export whose openkeyscan3.onnx.provenance.json (written by ml/export_openkeyscan.py) matches the file and records a passing parity check against the pinned commit + checkpoint. url stays null until a file is hosted somewhere we control."
   },
   "openkeyscan_sidecar": {
     "phase": "A (M1 only; removed in M2, see packaging-and-release M2 removal checklist)",

@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### macOS (Apple Silicon)
+- Fix: on macOS the ONNX Runtime dylib was staged as `libonnxruntime.dylib`, but its install name is
+  `@rpath/libonnxruntime.1.19.2.dylib`, so every binary using it would have failed to launch ("Library not
+  loaded"). It is now staged and bundled under its install name.
+- Fix (found by the first macOS CI run): `rt::isTrapInstalled()` used a weak undefined symbol, which Apple's linker
+  rejects ("Undefined symbols: _jaudios_rt_trap_installed"), so `app-cli` and `jaudios_tests` did not link on macOS.
+  The trap now registers itself from a static initializer in RealtimeTrapHooks.cpp.
+- CI: `.github/workflows/macos.yml` builds and tests on GitHub's `macos-15` arm64 runners (Release build, ML env
+  from the manifest pins, ONNX export, full ctest incl. CQT/ONNX goldens, app bundle checks, CLI run, rt_check).
+- CI: the key model is exported once on Linux (reproducing the manifest sha256) and handed to the macOS job as the
+  `openkeyscan3-onnx` artifact, so macOS tests the shipped file. Exporting on macOS arm64 currently segfaults
+  (second CI run); the macOS job keeps a non-fatal export attempt with faulthandler for diagnosis.
+- ml/export_openkeyscan.py runs its three stages in separate processes (torch export + reference logits;
+  onnx/onnxsim simplify; onnxruntime parity), so torch never shares a process with the onnx / onnxsim /
+  onnxruntime native libraries; addresses the macOS arm64 export segfault. Output unchanged on Linux (same sha256).
+  `ml/tests/export_probe.py` reports which library combination crashes, one process per case.
+- Fix (found by the macOS export probe): onnxsim 0.6.5 segfaults on macOS arm64 even on its own. For this model it
+  is a no-op (raw `torch.onnx.export` graph: same 23 ops, bit-identical weights), so when the simplify stage dies on
+  a signal the export validates and uses the raw graph; parity is still checked; provenance records
+  `"simplified": false`. On Linux nothing changes (onnxsim still runs, same sha256).
+- Model acceptance: exports are not byte-reproducible across machines (onnxsim folds constants with CPU-specific ORT
+  kernels; a GitHub Linux x86-64 runner produced a different sha256 with the same pins). `ml/export_openkeyscan.py`
+  now writes `openkeyscan3.onnx.provenance.json`; `KeyDetectorOnnx` and `tools/models.py` accept a model whose sha256
+  differs from the manifest only if that record matches the file, the pinned upstream commit + checkpoint, and a
+  passing parity check (< 1e-4). The app logs "verified local export from <platform>"; `modelOrigin()` reports it.
+- CI: the macOS job exports the model on the Mac and requires the app to load it (backend onnx).
+- Fix (found by the macOS golden test): the CoreML execution provider returned wrong logits (off by 3-5, different
+  key on 2 of 5 fixtures) with ONNX Runtime 1.19.2, running only 14 of 23 nodes. `KeyDetectorOnnx` now uses the CPU
+  provider on macOS too; `JAUDIOS_ONNX_COREML=1` opts in for investigation; `[onnx][coreml][!mayfail]` tracks it.
+- Docs: `docs/building-macos.md`.
+- Test: the ONNX session-creation timing is measured after one warm-up construction (the first one also pays for
+  loading the dylib and a cold disk cache, which flaked right after a rebuild).
+
 ### key-detection-openkeyscan Phase B (native ONNX)
 - `ml/export_openkeyscan.py`: upstream `eval.load_model()` (pinned checkout via `ml/openkeyscan_source.py`) →
   `torch.onnx.export` (opset 17, dynamic time axis, input `cqt` (1,1,105,T) → `logits` (1,24)) → onnxsim.

@@ -1,0 +1,156 @@
+# macOS / Apple Silicon is the product target (AGENTS.md). The macos job builds and tests JAudios on
+# a GitHub-hosted arm64 Mac so every PR is checked on the real platform, including the CoreML
+# execution provider and the app bundle layout.
+#
+# The key model is exported once on Linux (parity-checked; it carries a provenance record because
+# exports are not byte-identical across machines) and handed to the macOS job, which also exports
+# its own and proves the app accepts it.
+name: macOS (Apple Silicon)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ML_VENV: ${{ github.workspace }}/../jaudios-ml-venv
+
+jobs:
+  model:
+    name: Export key model (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache ML env
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.ML_VENV }}
+          key: ml-venv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('models/manifest.json') }}
+
+      - name: ML env (pins from models/manifest.json)
+        run: |
+          [ -x "$ML_VENV/bin/python" ] || python3.12 -m venv "$ML_VENV"
+          PINS=$(python3 -c "import json; m=json.load(open('models/manifest.json')); p={**m['openkeyscan_sidecar']['build']['pins'], **m['openkeyscan3_onnx']['export']['pins']}; print(' '.join(f'{k}=={v}' for k,v in p.items() if k not in ('python','pyinstaller','pyinstaller-hooks-contrib')))")
+          "$ML_VENV/bin/pip" install -q $PINS tqdm
+
+      - name: Linux build deps for the fixture renderer
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build libasound2-dev libfreetype-dev libfontconfig1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxcomposite-dev libxext-dev
+
+      - name: Render fixtures (needed by the parity check)
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DJAUDIOS_BUILD_TESTS=OFF -DJAUDIOS_BUILD_APP=OFF
+          cmake --build build --target fixtures
+
+      - name: Export + parity (+ provenance record)
+        env:
+          PYTHONFAULTHANDLER: "1"
+        run: python3 tools/models.py --only onnx --python "$ML_VENV/bin/python"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openkeyscan3-onnx
+          path: |
+            build/models/openkeyscan3.onnx
+            build/models/openkeyscan3.onnx.provenance.json
+          if-no-files-found: error
+
+  macos:
+    name: Build + test (macos-15, arm64)
+    needs: model
+    runs-on: macos-15 # arm64 (Apple Silicon)
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          uname -m
+          sw_vers
+          xcodebuild -version
+          cmake --version
+          brew install ninja
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache ML env
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.ML_VENV }}
+          key: ml-venv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('models/manifest.json') }}
+
+      - name: ML env (pins from models/manifest.json)
+        run: |
+          [ -x "$ML_VENV/bin/python" ] || python3.12 -m venv "$ML_VENV"
+          PINS=$(python3 -c "import json; m=json.load(open('models/manifest.json')); p={**m['openkeyscan_sidecar']['build']['pins'], **m['openkeyscan3_onnx']['export']['pins']}; print(' '.join(f'{k}=={v}' for k,v in p.items() if k not in ('python','pyinstaller','pyinstaller-hooks-contrib')))")
+          "$ML_VENV/bin/pip" install -q $PINS tqdm
+
+      - name: Configure (Release)
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DJAUDIOS_ML_PYTHON="$ML_VENV/bin/python"
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Render fixtures
+        run: cmake --build build --target fixtures
+
+      - name: Key model from the Linux job
+        uses: actions/download-artifact@v4
+        with:
+          name: openkeyscan3-onnx
+          path: build/models
+
+      - name: Verify model (manifest sha256 or verified provenance)
+        run: python3 tools/models.py --only onnx
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: App bundle layout
+        run: |
+          APP=build/app/JAudios_artefacts/Release/JAudios.app
+          ls -la "$APP/Contents/MacOS" "$APP/Contents/Frameworks"
+          otool -L "$APP/Contents/MacOS/JAudios" | grep -i onnxruntime
+          otool -l "$APP/Contents/MacOS/JAudios" | grep -A2 LC_RPATH
+          codesign --verify --verbose "$APP" || true # linker ad-hoc signature; Developer ID signing is packaging's job
+
+      - name: CLI on the fixture (default backend, debug log)
+        run: |
+          CLI=build/tools/cli/app-cli_artefacts/Release/app-cli
+          JAUDIOS_LOG_LEVEL=debug "$CLI" analyze tests/fixtures/house_124_Amin.wav
+          KEY_BACKEND=chroma "$CLI" analyze tests/fixtures/house_124_Amin.wav | head -40
+
+      - name: Realtime check
+        run: tools/rt_check.sh
+
+      - name: Probe library combinations (diagnostic)
+        continue-on-error: true
+        env:
+          PYTHONFAULTHANDLER: "1"
+        run: |
+          "$ML_VENV/bin/python" ml/export_openkeyscan.py --stage torch "$RUNNER_TEMP/raw.onnx" "$RUNNER_TEMP/refs.npz" tests/fixtures/loop_8bar_Gmaj.wav || echo "::warning::torch stage failed"
+          RAW="$RUNNER_TEMP/raw.onnx"; [ -f "$RAW" ] || RAW=build/models/openkeyscan3.onnx
+          "$ML_VENV/bin/python" ml/tests/export_probe.py "$RAW" build/models/openkeyscan3.onnx
+
+      - name: Export on macOS and load it in the app
+        env:
+          PYTHONFAULTHANDLER: "1"
+        run: |
+          MAC="$RUNNER_TEMP/mac-build"
+          "$ML_VENV/bin/python" ml/export_openkeyscan.py --out "$MAC/models/openkeyscan3.onnx" tests/fixtures/*.wav
+          cat "$MAC/models/openkeyscan3.onnx.provenance.json"
+          python3 tools/models.py --only onnx --build-dir "$MAC"
+          OUT=$(JAUDIOS_MODELS_DIR="$MAC/models" build/tools/cli/app-cli_artefacts/Release/app-cli analyze tests/fixtures/house_124_Amin.wav)
+          echo "$OUT" | python3 -c "import json,sys; k=json.load(sys.stdin)['key']; print('backend', k['backend'], k['camelot'], k.get('warning','')); sys.exit(0 if k['backend']=='onnx' else 1)"

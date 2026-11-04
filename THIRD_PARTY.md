@@ -15,7 +15,7 @@
 | Component | Version | License | Used for |
 |---|---|---|---|
 | onnx (Python) | 1.16.2 | Apache-2.0 | required by `torch.onnx.export` (approved 2026-11-04) |
-| onnxsim | 0.6.5 | Apache-2.0 | graph simplification after export (approved 2026-11-04) |
+| onnxsim | 0.6.5 | Apache-2.0 | graph simplification after export (approved 2026-11-04). Segfaults on macOS arm64; the export then uses the raw graph (numerically identical for this model) |
 | onnxruntime (Python) | 1.19.2 | MIT | PyTorch-vs-ORT parity check |
 | PyTorch / librosa / NumPy | see sidecar pins | BSD-3 / ISC / BSD-3 | export + reference CQT (`ml/tests/cqt_reference.py`) |
 

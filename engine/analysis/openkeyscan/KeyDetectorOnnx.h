@@ -12,9 +12,21 @@ namespace jaudios::analysis::openkeyscan
 struct OnnxConfig
 {
     juce::File modelFile;              // openkeyscan3.onnx (sha256 checked against models/manifest.json)
-    bool preferCoreML = true;          // macOS: CoreML EP first, CPU fallback
+    // macOS CoreML execution provider: OFF by default. With ONNX Runtime 1.19.2 it accepts only
+    // 14 of the model's 23 nodes (10 partitions) and the result is wrong: logits off by 3-5 and a
+    // different key on 2 of 5 fixtures (macos-15 arm64 CI). CPU inference is ~40 ms per track.
+    // Opt in with JAUDIOS_ONNX_COREML=1 only to investigate; the golden test catches the error.
+    bool preferCoreML = false;
     double ensembleBelowSec = 30.0;    // shorter inputs also run chroma (skill ensemble rule)
 };
+
+/** `<model>.provenance.json`, written by ml/export_openkeyscan.py next to the model it exported. */
+juce::File provenanceFileFor (const juce::File& model);
+
+/** A model whose sha256 differs from the manifest is accepted only if its provenance record matches
+    the file's sha256, comes from the pinned upstream commit + checkpoint, and records a passing
+    PyTorch-vs-ORT parity check. Returns the export platform, or nullopt with the reason in `why`. */
+std::optional<juce::String> verifyLocalExport (const juce::File& model, const juce::String& actualSha, juce::String& why);
 
 /** Softmax over the 24 logits (upstream class order) -> KeyResult (top3, margin, scores). */
 KeyResult keyResultFromLogits (const std::array<float, 24>& logits);
@@ -39,6 +51,8 @@ public:
     bool isReady() const noexcept;
     const juce::String& loadError() const noexcept { return error; }
     const juce::String& executionProvider() const noexcept { return provider; }
+    /** "canonical" (manifest sha256) or "local export (<platform>)". */
+    const juce::String& modelOrigin() const noexcept { return origin; }
 
     struct LoadTimings { double cqtBasisMs = 0, sha256Ms = 0, sessionMs = 0; };
     const LoadTimings& loadTimings() const noexcept { return timings; }
@@ -52,7 +66,7 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl;
     OnnxConfig config;
-    juce::String error, provider;
+    juce::String error, provider, origin;
     LoadTimings timings;
 };
 

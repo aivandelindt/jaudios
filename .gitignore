@@ -15,3 +15,4 @@ ml/third_party/
 # Models are never committed: `make models` (models/manifest.json)
 /models/*.onnx
 /models/*.pt
+/models/*.provenance.json

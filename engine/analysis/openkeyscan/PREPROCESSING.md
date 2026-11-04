@@ -100,5 +100,11 @@ Server = `openkeyscan_analyzer_server.py` @ pinned commit in a Python 3.12 venv 
 - Our CQT + ORT vs PyTorch on librosa input: same argmax on all 5 fixtures, max |Δlogits| 7.6e-6.
 - With real scores, the model's runner-up is the expected key on every synthetic fixture it misses
   (house 8B/8A 0.54/0.35, pop 8A/8B 0.54/0.41, loop 9A/9B, bass 8B/7A).
-- Not yet run: GiantSteps subset (MIREX ≥ 0.80), CoreML EP on Apple Silicon (built for, untested here).
+- CoreML EP on Apple Silicon (macos-15 arm64 CI, ORT 1.19.2): accepts 14 of 23 nodes (10 partitions); the logits
+  are off by 3-5 and the argmax changes on 2 of 5 fixtures (house 19 -> 7, bass 19 -> 6). CPU EP is therefore the
+  default on macOS too; `[onnx][coreml][!mayfail]` keeps measuring it.
+- Not yet run: GiantSteps subset (MIREX ≥ 0.80).
   Phase A stays until those pass (skill: "Keep Phase A code until Phase B passes acceptance").
+- Export on macOS arm64: onnxsim 0.6.5 segfaults (even alone; `ml/tests/export_probe.py`, macos-15 CI). For this
+  model onnxsim is a no-op: the raw export already has BatchNorm fused into Conv and the same 23 ops with
+  bit-identical weights. The export falls back to the raw graph and records `"simplified": false`.

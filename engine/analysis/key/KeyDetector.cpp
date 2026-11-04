@@ -26,6 +26,8 @@ AppConfig AppConfig::fromEnvironment (const std::map<juce::String, juce::String>
         c.keyBackend = it->second.trim().toLowerCase();
     if (auto it = env.find ("OPENKEYSCAN_SIDECAR"); it != env.end() && it->second.isNotEmpty())
         c.sidecarExecutable = juce::File (it->second.trim());
+    if (auto it = env.find ("JAUDIOS_ONNX_COREML"); it != env.end())
+        c.onnxCoreML = it->second.trim() == "1";
     if (auto it = env.find ("JAUDIOS_MODELS_DIR"); it != env.end() && it->second.isNotEmpty())
         c.modelsDir = juce::File (it->second.trim());
     if (auto it = env.find ("OPENKEYSCAN_SIDECAR_ARGS"); it != env.end())
@@ -37,7 +39,7 @@ AppConfig AppConfig::fromEnvironment (const std::map<juce::String, juce::String>
 AppConfig AppConfig::fromEnvironment()
 {
     std::map<juce::String, juce::String> env;
-    for (const char* name : { "KEY_BACKEND", "OPENKEYSCAN_SIDECAR", "OPENKEYSCAN_SIDECAR_ARGS", "JAUDIOS_MODELS_DIR" })
+    for (const char* name : { "KEY_BACKEND", "OPENKEYSCAN_SIDECAR", "OPENKEYSCAN_SIDECAR_ARGS", "JAUDIOS_MODELS_DIR", "JAUDIOS_ONNX_COREML" })
     {
         const auto value = juce::SystemStats::getEnvironmentVariable (name, {});
         if (value.isNotEmpty())
@@ -113,6 +115,7 @@ KeyDetectorHandle makeKeyDetector (const AppConfig& config)
         {
             openkeyscan::OnnxConfig oc;
             oc.modelFile = model;
+            oc.preferCoreML = config.onnxCoreML;
             auto onnx = std::make_unique<openkeyscan::KeyDetectorOnnx> (oc);
             if (onnx->isReady())
             {

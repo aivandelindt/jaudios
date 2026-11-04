@@ -69,6 +69,7 @@ struct AppConfig
     juce::File sidecarExecutable;
     juce::StringArray sidecarArguments;
     juce::File modelsDir;
+    bool onnxCoreML = false; // JAUDIOS_ONNX_COREML=1 (macOS; gives wrong results with ORT 1.19.2)
 
     static AppConfig fromEnvironment();
     static AppConfig fromEnvironment (const std::map<juce::String, juce::String>& env);
