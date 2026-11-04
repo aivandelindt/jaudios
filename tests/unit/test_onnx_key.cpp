@@ -4,6 +4,7 @@
 #include "engine/analysis/openkeyscan/KeyDetectorOnnx.h"
 #include "engine/analysis/openkeyscan/OpenKeyScanProtocol.h"
 #include "engine/theory/Key.h"
+#include "engine/util/Sha256.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
@@ -191,5 +192,113 @@ TEST_CASE ("makeKeyDetector: onnx backend and auto preference", "[onnx][factory]
         empty.modelsDir = withModel.modelsDir;
         CHECK (makeKeyDetector (empty).backend == KeyBackend::onnx);
         CHECK (AppConfig::fromEnvironment ({ { "JAUDIOS_MODELS_DIR", "/opt/m" } }).modelsDir.getFullPathName() == "/opt/m");
+    }
+}
+
+namespace
+{
+/** Valid ONNX model whose bytes differ from the canonical one: an extra unknown protobuf field
+    (field 1000, varint 1) appended to ModelProto, which ONNX Runtime's parser keeps and ignores.
+    Stands in for an export whose bytes differ by platform (macOS arm64). */
+juce::File writeVariantModel (const juce::File& dir)
+{
+    juce::MemoryBlock mb;
+    devModel().loadFileAsData (mb);
+    const unsigned char unknownField[] = { 0xC0, 0x3E, 0x01 }; // key (1000 << 3 | 0) = 8000, value 1
+    mb.append (unknownField, sizeof (unknownField));
+    const auto f = dir.getChildFile ("openkeyscan3.onnx");
+    f.replaceWithData (mb.getData(), mb.getSize());
+    return f;
+}
+
+juce::var manifest() { return juce::JSON::parse (juce::File (JAUDIOS_SOURCE_DIR).getChildFile ("models/manifest.json")); }
+
+void writeProvenance (const juce::File& model, std::function<void (juce::DynamicObject&)> tweak = {})
+{
+    auto* o = new juce::DynamicObject();
+    o->setProperty ("sha256", juce::String (jaudios::util::Sha256::ofFile (model.getFullPathName().toStdString())));
+    o->setProperty ("source_commit", manifest()["openkeyscan_source"]["commit"]);
+    o->setProperty ("checkpoint_sha256", manifest()["openkeyscan3_pt"]["sha256"]);
+    o->setProperty ("parity_max_abs_logits", 1.4e-6);
+    o->setProperty ("parity_threshold", 1e-4);
+    o->setProperty ("argmax_match", true);
+    o->setProperty ("platform", "darwin-arm64");
+    if (tweak)
+        tweak (*o);
+    provenanceFileFor (model).replaceWithText (juce::JSON::toString (juce::var (o)));
+}
+} // namespace
+
+TEST_CASE ("A verified local export with a different sha256 is accepted", "[onnx][provenance]")
+{
+    REQUIRE_MODEL();
+    test::TempDir tmp;
+    const auto model = writeVariantModel (tmp.dir);
+    REQUIRE (juce::String (jaudios::util::Sha256::ofFile (model.getFullPathName().toStdString())) != KeyDetectorOnnx::expectedModelSha256());
+    writeProvenance (model);
+
+    OnnxConfig config;
+    config.modelFile = model;
+    KeyDetectorOnnx detector (config);
+
+    REQUIRE (detector.isReady());
+    CHECK (detector.modelOrigin() == "local export (darwin-arm64)");
+
+    auto audio = test::renderNotes (test::progression (7, false, { 0, 3, 4, 0 }, 1.0, 10), 40.5);
+    CHECK (detector.analyzeBuffer (audio, 44100.0).backend == KeyBackend::onnx);
+
+    // The dev model is reported as "canonical" only when it is the manifest's exact file. Exports are
+    // not byte-reproducible across machines (onnxsim constant folding runs on CPU-specific ORT
+    // kernels), so on CI it is usually a verified local export of its own.
+    OnnxConfig dev;
+    dev.modelFile = devModel();
+    const bool isManifestFile = juce::String (jaudios::util::Sha256::ofFile (devModel().getFullPathName().toStdString()))
+                                == KeyDetectorOnnx::expectedModelSha256();
+    const auto devOrigin = KeyDetectorOnnx (dev).modelOrigin();
+    INFO ("dev model origin: " << devOrigin);
+    CHECK ((isManifestFile ? devOrigin == "canonical" : devOrigin.startsWith ("local export (")));
+}
+
+TEST_CASE ("A different sha256 without a valid provenance record is refused", "[onnx][provenance]")
+{
+    REQUIRE_MODEL();
+    test::TempDir tmp;
+    const auto model = writeVariantModel (tmp.dir);
+
+    auto refused = [&] (const char* expectedReason)
+    {
+        OnnxConfig config;
+        config.modelFile = model;
+        KeyDetectorOnnx detector (config);
+        INFO (detector.loadError());
+        CHECK_FALSE (detector.isReady());
+        CHECK (detector.loadError().contains (expectedReason));
+    };
+
+    SECTION ("no record (e.g. a crashed export)") { refused ("no openkeyscan3.onnx.provenance.json"); }
+    SECTION ("record for another file")
+    {
+        writeProvenance (model, [] (juce::DynamicObject& o) { o.setProperty ("sha256", juce::String::repeatedString ("0", 64)); });
+        refused ("does not match the file");
+    }
+    SECTION ("failed parity")
+    {
+        writeProvenance (model, [] (juce::DynamicObject& o) { o.setProperty ("parity_max_abs_logits", 3e-3); });
+        refused ("passing parity");
+    }
+    SECTION ("loosened threshold")
+    {
+        writeProvenance (model, [] (juce::DynamicObject& o) { o.setProperty ("parity_threshold", 1.0); o.setProperty ("parity_max_abs_logits", 0.5); });
+        refused ("passing parity");
+    }
+    SECTION ("other upstream commit")
+    {
+        writeProvenance (model, [] (juce::DynamicObject& o) { o.setProperty ("source_commit", "deadbeef"); });
+        refused ("different upstream commit");
+    }
+    SECTION ("other checkpoint")
+    {
+        writeProvenance (model, [] (juce::DynamicObject& o) { o.setProperty ("checkpoint_sha256", "x"); });
+        refused ("different checkpoint");
     }
 }

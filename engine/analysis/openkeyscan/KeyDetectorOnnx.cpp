@@ -25,6 +25,8 @@ extern "C" OrtStatus* ORT_API_CALL OrtSessionOptionsAppendExecutionProvider_Core
 namespace jaudios::analysis::openkeyscan
 {
 
+constexpr double kExportParityThreshold = 1e-4; // ml/export_openkeyscan.py PARITY
+
 juce::String KeyDetectorOnnx::expectedModelSha256()
 {
    #ifdef JAUDIOS_OPENKEYSCAN_ONNX_SHA256
@@ -32,6 +34,60 @@ juce::String KeyDetectorOnnx::expectedModelSha256()
    #else
     return {};
    #endif
+}
+
+juce::File provenanceFileFor (const juce::File& model)
+{
+    return model.getSiblingFile (model.getFileName() + ".provenance.json");
+}
+
+std::optional<juce::String> verifyLocalExport (const juce::File& model, const juce::String& actualSha, juce::String& why)
+{
+    const auto file = provenanceFileFor (model);
+    if (! file.existsAsFile())
+    {
+        why = "no " + file.getFileName();
+        return std::nullopt;
+    }
+
+    const auto p = juce::JSON::parse (file);
+    if (! p.isObject())
+    {
+        why = file.getFileName() + " is not valid JSON";
+        return std::nullopt;
+    }
+
+    if (p["sha256"].toString() != actualSha)
+    {
+        why = "provenance sha256 does not match the file (modified or truncated after export)";
+        return std::nullopt;
+    }
+
+   #ifdef JAUDIOS_OPENKEYSCAN_SOURCE_COMMIT
+    if (p["source_commit"].toString() != JAUDIOS_OPENKEYSCAN_SOURCE_COMMIT)
+    {
+        why = "exported from a different upstream commit (" + p["source_commit"].toString().substring (0, 8) + ")";
+        return std::nullopt;
+    }
+   #endif
+   #ifdef JAUDIOS_OPENKEYSCAN_CHECKPOINT_SHA256
+    if (p["checkpoint_sha256"].toString() != JAUDIOS_OPENKEYSCAN_CHECKPOINT_SHA256)
+    {
+        why = "exported from a different checkpoint";
+        return std::nullopt;
+    }
+   #endif
+
+    const double parity = p.getProperty ("parity_max_abs_logits", -1.0);
+    const double threshold = p.getProperty ("parity_threshold", 0.0);
+    if (! (parity >= 0.0 && threshold > 0.0 && threshold <= kExportParityThreshold && parity < threshold)
+        || ! (bool) p.getProperty ("argmax_match", false))
+    {
+        why = "provenance does not record a passing parity check";
+        return std::nullopt;
+    }
+
+    return p["platform"].toString();
 }
 
 KeyResult keyResultFromLogits (const std::array<float, 24>& logits)
@@ -100,10 +156,26 @@ KeyDetectorOnnx::KeyDetectorOnnx (OnnxConfig c) : config (std::move (c))
     if (expected.isNotEmpty())
     {
         const juce::String got (util::Sha256::ofFile (config.modelFile.getFullPathName().toStdString()));
-        if (got != expected)
+        if (got == expected)
+            origin = "canonical";
+        else
         {
-            error = "key model sha256 mismatch (" + got.substring (0, 12) + "... != " + expected.substring (0, 12) + "...)";
-            return;
+            // Not the manifest's file: accept a model exported and verified by
+            // ml/export_openkeyscan.py on this machine (e.g. on macOS arm64, where the export is not
+            // byte-identical to the Linux one), proven by its provenance record.
+            juce::String why;
+            if (const auto platform = verifyLocalExport (config.modelFile, got, why))
+            {
+                origin = "local export (" + *platform + ")";
+                log::info ("Key model " + config.modelFile.getFileName() + " is a verified local export from "
+                           + *platform + " (sha256 " + got.substring (0, 12) + "...)");
+            }
+            else
+            {
+                error = "key model sha256 mismatch (" + got.substring (0, 12) + "... != " + expected.substring (0, 12)
+                      + "...) and not a verified local export: " + why;
+                return;
+            }
         }
     }
 

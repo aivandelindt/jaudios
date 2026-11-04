@@ -8,6 +8,9 @@
 - onnxsim simplification (dynamic time axis kept); the simplified model is the shipped one
 - parity: PyTorch vs ONNX Runtime (CPU) on each fixture's reference CQT, max |dlogits| < 1e-4
 - prints sha256 + size for models/manifest.json
+- writes <out>.provenance.json (sha256, parity, source commit, checkpoint, platform, versions). A model
+  whose sha256 differs from the manifest (e.g. exported on macOS arm64) is accepted by the app and by
+  tools/models.py only with a provenance record that matches the file and records a passing parity.
 
 The three stages run in separate processes, each loading only the native libraries it needs:
   1. torch      : export the raw graph + PyTorch reference logits on the fixtures (-> .npz)
@@ -17,7 +20,7 @@ Loading torch together with the onnx / onnxsim / onnxruntime wheels in one proce
 macOS arm64 (each wheel bundles its own native protobuf / onnx code); on Linux it happened to work.
 The orchestrating process imports none of them.
 """
-import argparse, hashlib, subprocess, sys, tempfile
+import argparse, datetime, hashlib, json, platform, subprocess, sys, tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -68,7 +71,7 @@ def stage_simplify(raw: Path, out: Path):
           f"nodes={len(simplified.graph.node)}", flush=True)
 
 
-def stage_parity(out: Path, refs: Path, fixtures):
+def stage_parity(out: Path, refs: Path, result: Path, fixtures):
     import numpy as np
     import onnxruntime as ort
 
@@ -86,6 +89,7 @@ def stage_parity(out: Path, refs: Path, fixtures):
     print(f"[onnxruntime {ort.__version__}] worst max|dlogits| = {worst:.2e} (threshold {PARITY:g})")
     if worst >= PARITY:
         sys.exit("parity FAILED")
+    result.write_text(json.dumps({"worst": worst, "fixtures": len(fixtures), "onnxruntime": ort.__version__}))
 
 
 def run_stage(*args):
@@ -109,7 +113,7 @@ def main():
         if name == "simplify":
             return stage_simplify(Path(rest[0]), Path(rest[1]))
         if name == "parity":
-            return stage_parity(Path(rest[0]), Path(rest[1]), rest[2:])
+            return stage_parity(Path(rest[0]), Path(rest[1]), Path(rest[2]), rest[3:])
         sys.exit(f"unknown stage {name}")
 
     if not args.fixtures:
@@ -119,14 +123,37 @@ def main():
     out.parent.mkdir(parents=True, exist_ok=True)
     openkeyscan_source.ensure_checkout()
 
+    provenance = out.with_name(out.name + ".provenance.json")
+    provenance.unlink(missing_ok=True)  # never leave a record from an earlier export next to a new file
+
     with tempfile.TemporaryDirectory() as tmp:
-        raw, refs = Path(tmp) / "raw.onnx", Path(tmp) / "refs.npz"
+        raw, refs, parity = Path(tmp) / "raw.onnx", Path(tmp) / "refs.npz", Path(tmp) / "parity.json"
         run_stage("torch", raw, refs, *args.fixtures)
         run_stage("simplify", raw, out)
-        run_stage("parity", out, refs, *args.fixtures)
+        run_stage("parity", out, refs, parity, *args.fixtures)
+        checked = json.loads(parity.read_text())
 
     data = out.read_bytes()
-    print(f"{out}  size={len(data)}  sha256={hashlib.sha256(data).hexdigest()}")
+    sha = hashlib.sha256(data).hexdigest()
+    pins = openkeyscan_source.MANIFEST["openkeyscan3_onnx"]["export"]["pins"]
+    provenance.write_text(json.dumps({
+        "file": out.name,
+        "sha256": sha,
+        "size": len(data),
+        "matches_manifest": sha == openkeyscan_source.MANIFEST["openkeyscan3_onnx"]["sha256"],
+        "parity_max_abs_logits": checked["worst"],
+        "parity_threshold": PARITY,
+        "argmax_match": True,
+        "parity_fixtures": checked["fixtures"],
+        "source_commit": openkeyscan_source.SOURCE["commit"],
+        "checkpoint_sha256": openkeyscan_source.CHECKPOINT["sha256"],
+        "platform": f"{sys.platform}-{platform.machine()}",
+        "python": platform.python_version(),
+        "pins": pins,
+        "exported_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+    }, indent=2) + "\n")
+    print(f"{out}  size={len(data)}  sha256={sha}")
+    print(f"{provenance}")
 
 
 if __name__ == "__main__":

@@ -48,13 +48,44 @@ def unpack(zip_path, dest):
     print(f"sidecar ready: {exe}")
 
 
+def verified_local_export(manifest, model, got):
+    """Same rule as KeyDetectorOnnx: a model whose sha256 differs from the manifest is accepted only with a
+    provenance record (written by ml/export_openkeyscan.py) that matches the file and records a passing
+    parity check against the pinned upstream commit + checkpoint. Returns (ok, reason_or_platform)."""
+    prov = model.with_name(model.name + ".provenance.json")
+    if not prov.exists():
+        return False, f"no {prov.name}"
+    try:
+        p = json.loads(prov.read_text())
+    except ValueError:
+        return False, f"{prov.name} is not valid JSON"
+    if p.get("sha256") != got:
+        return False, "provenance sha256 does not match the file"
+    if p.get("source_commit") != manifest["openkeyscan_source"]["commit"]:
+        return False, "exported from a different upstream commit"
+    if p.get("checkpoint_sha256") != manifest["openkeyscan3_pt"]["sha256"]:
+        return False, "exported from a different checkpoint"
+    parity, threshold = p.get("parity_max_abs_logits", -1), p.get("parity_threshold", 0)
+    if not (0 <= parity < threshold <= 1e-4) or not p.get("argmax_match"):
+        return False, "provenance does not record a passing parity check"
+    return True, p.get("platform", "?")
+
+
 def ensure_onnx(manifest, build_dir, python):
     """Phase B model: verify build/models/openkeyscan3.onnx, downloading or exporting it if needed."""
     entry = manifest["openkeyscan3_onnx"]
     dest = build_dir / "models" / entry["file"]
-    if dest.exists() and sha256(dest) == entry["sha256"]:
-        print(f"model ready: {dest}")
-        return 0
+    if dest.exists():
+        got = sha256(dest)
+        if got == entry["sha256"]:
+            print(f"model ready: {dest}")
+            return 0
+        ok, info = verified_local_export(manifest, dest, got)
+        if ok:
+            print(f"model ready: {dest} (verified local export from {info}; sha256 {got[:12]}... differs from the manifest)")
+            return 0
+        if not python and not entry.get("url"):
+            sys.exit(f"error: {dest} has sha256 {got[:12]}..., not the manifest's, and is not a verified local export ({info})")
     if entry.get("url"):
         dest.parent.mkdir(parents=True, exist_ok=True)
         urllib.request.urlretrieve(entry["url"], dest)
@@ -70,7 +101,11 @@ def ensure_onnx(manifest, build_dir, python):
         return 1
     got = sha256(dest)
     if got != entry["sha256"]:
-        sys.exit(f"error: sha256 mismatch for {dest}: {got} != {entry['sha256']}")
+        ok, info = verified_local_export(manifest, dest, got)
+        if not ok:
+            sys.exit(f"error: sha256 mismatch for {dest}: {got} != {entry['sha256']} ({info})")
+        print(f"model ready: {dest} (verified local export from {info}; sha256 {got[:12]}... differs from the manifest)")
+        return 0
     print(f"model ready: {dest}")
     return 0
 

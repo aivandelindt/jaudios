@@ -2,8 +2,9 @@
 # a GitHub-hosted arm64 Mac so every PR is checked on the real platform, including the CoreML
 # execution provider and the app bundle layout.
 #
-# The key model is exported once on Linux (the job reproduces the sha256 pinned in
-# models/manifest.json) and handed to the macOS job, so macOS tests the exact file users ship.
+# The key model is exported once on Linux (parity-checked; it carries a provenance record because
+# exports are not byte-identical across machines) and handed to the macOS job, which also exports
+# its own and proves the app accepts it.
 name: macOS (Apple Silicon)
 
 on:
@@ -21,7 +22,7 @@ env:
 
 jobs:
   model:
-    name: Export key model (Linux, canonical)
+    name: Export key model (Linux)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -51,7 +52,7 @@ jobs:
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DJAUDIOS_BUILD_TESTS=OFF -DJAUDIOS_BUILD_APP=OFF
           cmake --build build --target fixtures
 
-      - name: Export + parity + sha256 check against the manifest
+      - name: Export + parity (+ provenance record)
         env:
           PYTHONFAULTHANDLER: "1"
         run: python3 tools/models.py --only onnx --python "$ML_VENV/bin/python"
@@ -59,7 +60,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: openkeyscan3-onnx
-          path: build/models/openkeyscan3.onnx
+          path: |
+            build/models/openkeyscan3.onnx
+            build/models/openkeyscan3.onnx.provenance.json
           if-no-files-found: error
 
   macos:
@@ -103,13 +106,13 @@ jobs:
       - name: Render fixtures
         run: cmake --build build --target fixtures
 
-      - name: Canonical key model (from the Linux job)
+      - name: Key model from the Linux job
         uses: actions/download-artifact@v4
         with:
           name: openkeyscan3-onnx
           path: build/models
 
-      - name: Verify model against the manifest
+      - name: Verify model (manifest sha256 or verified provenance)
         run: python3 tools/models.py --only onnx
 
       - name: Test
@@ -132,9 +135,7 @@ jobs:
       - name: Realtime check
         run: tools/rt_check.sh
 
-      - name: macOS export (staged, isolated processes) + probe
-        # Non-fatal until it has passed on macOS: the probe reports which library combination, if
-        # any, still crashes; the staged export must reproduce the canonical sha256.
+      - name: Probe library combinations (diagnostic)
         continue-on-error: true
         env:
           PYTHONFAULTHANDLER: "1"
@@ -142,6 +143,14 @@ jobs:
           "$ML_VENV/bin/python" ml/export_openkeyscan.py --stage torch "$RUNNER_TEMP/raw.onnx" "$RUNNER_TEMP/refs.npz" tests/fixtures/loop_8bar_Gmaj.wav || echo "::warning::torch stage failed"
           RAW="$RUNNER_TEMP/raw.onnx"; [ -f "$RAW" ] || RAW=build/models/openkeyscan3.onnx
           "$ML_VENV/bin/python" ml/tests/export_probe.py "$RAW" build/models/openkeyscan3.onnx
-          "$ML_VENV/bin/python" ml/export_openkeyscan.py --out "$RUNNER_TEMP/mac-export.onnx" tests/fixtures/*.wav
-          shasum -a 256 "$RUNNER_TEMP/mac-export.onnx" build/models/openkeyscan3.onnx
-          cmp "$RUNNER_TEMP/mac-export.onnx" build/models/openkeyscan3.onnx && echo "macOS export is byte-identical to the canonical model"
+
+      - name: Export on macOS and load it in the app
+        env:
+          PYTHONFAULTHANDLER: "1"
+        run: |
+          MAC="$RUNNER_TEMP/mac-build"
+          "$ML_VENV/bin/python" ml/export_openkeyscan.py --out "$MAC/models/openkeyscan3.onnx" tests/fixtures/*.wav
+          cat "$MAC/models/openkeyscan3.onnx.provenance.json"
+          python3 tools/models.py --only onnx --build-dir "$MAC"
+          OUT=$(JAUDIOS_MODELS_DIR="$MAC/models" build/tools/cli/app-cli_artefacts/Release/app-cli analyze tests/fixtures/house_124_Amin.wav)
+          echo "$OUT" | python3 -c "import json,sys; k=json.load(sys.stdin)['key']; print('backend', k['backend'], k['camelot'], k.get('warning','')); sys.exit(0 if k['backend']=='onnx' else 1)"

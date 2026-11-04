@@ -28,7 +28,12 @@ target_compile_definitions(engine_analysis PRIVATE
 # Phase B: ONNX Runtime + the model's expected sha256 from models/manifest.json.
 file(READ "${PROJECT_SOURCE_DIR}/models/manifest.json" _manifest)
 string(JSON _onnx_sha GET "${_manifest}" openkeyscan3_onnx sha256)
-target_compile_definitions(engine_analysis PRIVATE JAUDIOS_OPENKEYSCAN_ONNX_SHA256="${_onnx_sha}")
+string(JSON _source_commit GET "${_manifest}" openkeyscan_source commit)
+string(JSON _ckpt_sha GET "${_manifest}" openkeyscan3_pt sha256)
+target_compile_definitions(engine_analysis PRIVATE
+    JAUDIOS_OPENKEYSCAN_ONNX_SHA256="${_onnx_sha}"
+    JAUDIOS_OPENKEYSCAN_SOURCE_COMMIT="${_source_commit}"
+    JAUDIOS_OPENKEYSCAN_CHECKPOINT_SHA256="${_ckpt_sha}")
 if(JAUDIOS_WITH_ONNXRUNTIME)
     target_link_libraries(engine_analysis PRIVATE onnxruntime::onnxruntime)
     target_compile_definitions(engine_analysis PRIVATE JAUDIOS_HAS_ONNXRUNTIME=1)

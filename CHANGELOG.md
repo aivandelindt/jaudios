@@ -18,7 +18,13 @@
   onnx/onnxsim simplify; onnxruntime parity), so torch never shares a process with the onnx / onnxsim /
   onnxruntime native libraries; addresses the macOS arm64 export segfault. Output unchanged on Linux (same sha256).
   `ml/tests/export_probe.py` reports which library combination crashes, one process per case.
-- Docs: `docs/building-macos.md` (model via the CI artifact or a Linux export until the macOS export is fixed).
+- Model acceptance: exports are not byte-reproducible across machines (onnxsim folds constants with CPU-specific ORT
+  kernels; a GitHub Linux x86-64 runner produced a different sha256 with the same pins). `ml/export_openkeyscan.py`
+  now writes `openkeyscan3.onnx.provenance.json`; `KeyDetectorOnnx` and `tools/models.py` accept a model whose sha256
+  differs from the manifest only if that record matches the file, the pinned upstream commit + checkpoint, and a
+  passing parity check (< 1e-4). The app logs "verified local export from <platform>"; `modelOrigin()` reports it.
+- CI: the macOS job exports the model on the Mac and requires the app to load it (backend onnx).
+- Docs: `docs/building-macos.md`.
 - Test: the ONNX session-creation timing is measured after one warm-up construction (the first one also pays for
   loading the dylib and a cold disk cache, which flaked right after a rebuild).
 
