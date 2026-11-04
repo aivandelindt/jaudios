@@ -56,13 +56,13 @@ public:
 };
 
 /** Runtime configuration.
-    KEY_BACKEND = auto | sidecar | onnx | chroma (default auto: sidecar when one is found, else chroma).
+    KEY_BACKEND = chroma | auto | sidecar | onnx (default chroma; auto = sidecar when one is found, else chroma).
     OPENKEYSCAN_SIDECAR = executable (default: bundled, then the dev build's build/sidecar/...).
     OPENKEYSCAN_SIDECAR_ARGS = extra leading arguments, space separated (e.g. a server.py when the
     executable is a Python interpreter). */
 struct AppConfig
 {
-    juce::String keyBackend = "auto";
+    juce::String keyBackend = "chroma";
     juce::File sidecarExecutable;
     juce::StringArray sidecarArguments;
 
