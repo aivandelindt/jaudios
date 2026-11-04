@@ -10,6 +10,7 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_core/juce_core.h>
 
+#include <array>
 #include <cmath>
 #include <iostream>
 #include <vector>
@@ -46,12 +47,12 @@ const std::vector<Spec>& specs()
     return s;
 }
 
-int scaleOffset (bool minor, int degree)
+int scaleOffset (bool isMinor, int degree)
 {
-    static const int major[] = { 0, 2, 4, 5, 7, 9, 11 };
-    static const int naturalMinor[] = { 0, 2, 3, 5, 7, 8, 10 };
-    const int oct = degree / 7;
-    return 12 * oct + (minor ? naturalMinor : major)[degree % 7];
+    constexpr std::array<int, 7> majorScale { 0, 2, 4, 5, 7, 9, 11 };
+    constexpr std::array<int, 7> naturalMinorScale { 0, 2, 3, 5, 7, 8, 10 };
+    const auto& scale = isMinor ? naturalMinorScale : majorScale;
+    return 12 * (degree / 7) + scale[(size_t) (degree % 7)];
 }
 
 /** Diatonic triad on `degree` as MIDI notes, root in the octave starting at `baseMidi`. */

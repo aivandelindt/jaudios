@@ -20,6 +20,10 @@ include(analysis/sources.cmake)
 
 jaudios_engine_lib(engine_theory     SOURCES ${ENGINE_THEORY_SOURCES})
 jaudios_engine_lib(engine_analysis   SOURCES ${ENGINE_ANALYSIS_SOURCES} DEPS engine_theory jaudios_juce)
+# Dev location of the OpenKeyScan sidecar unpacked by `make models` (see models/manifest.json).
+target_compile_definitions(engine_analysis PRIVATE
+    JAUDIOS_DEV_SIDECAR_DIR="${PROJECT_BINARY_DIR}/sidecar/openkeyscan-analyzer")
+
 jaudios_engine_lib(engine_generators DEPS engine_theory)
 jaudios_engine_lib(engine_synth      DEPS jaudios_juce)
 jaudios_engine_lib(engine_fx         DEPS jaudios_juce)

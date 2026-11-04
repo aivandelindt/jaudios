@@ -8,6 +8,7 @@
 #include <array>
 #include <map>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace jaudios::analysis
@@ -35,6 +36,12 @@ struct KeyResult
     bool scoresAvailable = true;     // false: backend only returns argmax (UI hides alternatives)
     bool lowConfidence = false;      // margin < lowConfidenceMargin, or no tonal content
     std::array<float, 24> scores {}; // softmax over theory::index24 order (when scoresAvailable)
+
+    juce::String warning;            // non-blocking: e.g. sidecar unavailable, chroma used instead
+
+    // Ensemble (< 30 s inputs with the sidecar): the chroma opinion and whether it agreed.
+    std::shared_ptr<const KeyResult> ensembleChroma;
+    std::optional<bool> chromaAgrees;
 };
 
 inline constexpr float lowConfidenceMargin = 0.15f;
@@ -48,10 +55,16 @@ public:
     virtual KeyResult analyzeBuffer (const juce::AudioBuffer<float>&, double sampleRate) = 0;
 };
 
-/** Runtime configuration. KEY_BACKEND = sidecar | onnx | chroma (default chroma). */
+/** Runtime configuration.
+    KEY_BACKEND = auto | sidecar | onnx | chroma (default auto: sidecar when one is found, else chroma).
+    OPENKEYSCAN_SIDECAR = executable (default: bundled, then the dev build's build/sidecar/...).
+    OPENKEYSCAN_SIDECAR_ARGS = extra leading arguments, space separated (e.g. a server.py when the
+    executable is a Python interpreter). */
 struct AppConfig
 {
-    juce::String keyBackend = "chroma";
+    juce::String keyBackend = "auto";
+    juce::File sidecarExecutable;
+    juce::StringArray sidecarArguments;
 
     static AppConfig fromEnvironment();
     static AppConfig fromEnvironment (const std::map<juce::String, juce::String>& env);
@@ -65,8 +78,11 @@ struct KeyDetectorHandle
 };
 
 /** Builds the requested backend, falling back to chroma (with a warning) when it is unavailable.
-    In this build only `chroma` exists: the OpenKeyScan sidecar (Phase A) and ONNX (Phase B)
-    backends are pending dependency approval. */
+    `onnx` (Phase B, M2) is not implemented yet. The sidecar process is only started on first use
+    (on the Analysis thread). */
 KeyDetectorHandle makeKeyDetector (const AppConfig&);
+
+/** Where the sidecar executable is looked for when none is configured (first existing wins). */
+juce::Array<juce::File> sidecarSearchLocations();
 
 } // namespace jaudios::analysis

@@ -133,17 +133,27 @@ TEST_CASE ("makeKeyDetector honours KEY_BACKEND and falls back to chroma", "[key
         CHECK (d.backend == KeyBackend::chroma);
         CHECK (d.warning.isEmpty());
     }
-    SECTION ("sidecar / onnx are not available in this build")
+    SECTION ("onnx is not available yet; sidecar without an executable")
     {
         for (const char* name : { "sidecar", "onnx" })
         {
             AppConfig config;
             config.keyBackend = name;
+            config.sidecarExecutable = juce::File ("/nonexistent/openkeyscan-analyzer");
             auto d = makeKeyDetector (config);
             REQUIRE (d.detector != nullptr);
             CHECK (d.backend == KeyBackend::chroma);
             CHECK (d.warning.isNotEmpty());
         }
+    }
+    SECTION ("auto without a sidecar is chroma, without a warning")
+    {
+        AppConfig config;
+        config.keyBackend = "auto";
+        config.sidecarExecutable = juce::File ("/nonexistent/openkeyscan-analyzer");
+        auto d = makeKeyDetector (config);
+        CHECK (d.backend == KeyBackend::chroma);
+        CHECK (d.warning.isEmpty());
     }
     SECTION ("unknown value")
     {
@@ -156,7 +166,7 @@ TEST_CASE ("makeKeyDetector honours KEY_BACKEND and falls back to chroma", "[key
     SECTION ("environment variable")
     {
         CHECK (AppConfig::fromEnvironment ({ { "KEY_BACKEND", "onnx" } }).keyBackend == "onnx");
-        CHECK (AppConfig::fromEnvironment ({}).keyBackend == "chroma");
+        CHECK (AppConfig::fromEnvironment ({}).keyBackend == "auto");
     }
 }
 

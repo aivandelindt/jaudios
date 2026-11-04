@@ -9,4 +9,6 @@ set(JAUDIOS_TEST_SOURCES
     # key-and-tempo-analysis
     ${CMAKE_CURRENT_LIST_DIR}/test_key_theory.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_key_detection.cpp
-    ${CMAKE_CURRENT_LIST_DIR}/test_tempo.cpp)
+    ${CMAKE_CURRENT_LIST_DIR}/test_tempo.cpp
+    # key-detection-openkeyscan Phase A (sidecar)
+    ${CMAKE_CURRENT_LIST_DIR}/test_openkeyscan.cpp)

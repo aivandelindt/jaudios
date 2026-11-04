@@ -1,41 +1,94 @@
 # OpenKeyScan preprocessing — exact parameters
 
-Pinned source: rekordcloud/openkeyscan-analyzer @ <tag/commit>  (fill from models/manifest.json)
-Files read: preprocess_data.py, openkeyscan_analyzer.py, openkeyscan_analyzer_server.py, model.py
+Pinned source: rekordcloud/openkeyscan-analyzer @ `6a2915f43b3bf2c825ddf508e2a703ffd4df8fb6`
+(no tags upstream; see `models/manifest.json`). Checkpoint `checkpoints/openkeyscan3.pt`,
+sha256 `5610691be2b3aa21764c5978ca0c2524fcdbf600f09dcbda6c2da937745db600`, 18 830 452 bytes.
+Files read: README.md, INTERFACING.md, openkeyscan_analyzer_server.py, dataset.py, model.py,
+openkeyscan_analyzer.spec, build-linux-x64.sh. Everything below is copied from the **server**
+code path (`preprocess_audio()`), which is what Phase A runs and what Phase B must reproduce.
 
-## Audio loading
-- Decoder: <soundfile / audioread / PyAV — confirm which the server uses, and whether it resamples>
-- Target sample rate: 44100 Hz (repo docs)
-- Channels: <mono downmix method — mean? first channel?>
-- Duration handling: <full track? trimmed? padded?>
+## Audio loading (server `preprocess_audio`)
+- Two decoders, chosen by platform **and** extension:
+  - `sys.platform in {'win32','linux'}` and suffix in `{.mp3,.mp4,.m4a,.aac}` → PyAV
+    (`load_audio_pyav_optimized`): `av.AudioResampler(format='flt', layout='mono', rate=44100)`
+    (FFmpeg's downmix + resampler), then **peak-normalised to 0.95** (`w / max|w| * 0.95`).
+  - everything else (WAV/FLAC/OGG/AIFF/AU everywhere, and *all* formats on macOS) →
+    `librosa.load(path, sr=44100, mono=True)` (librosa 0.11.0: mono = mean of channels,
+    resampling `res_type='soxr_hq'`), **no normalisation**, cast to float32.
+- ⚠ `log1p` is not scale-invariant, so the same MP3 gives a different spectrogram on macOS
+  (librosa, raw level) than on Windows/Linux (PyAV, peak 0.95). Phase B must pick one; our Phase A
+  `analyzeBuffer` always sends a WAV, which takes the librosa path on every platform.
+- Duration: full file, no trimming or padding.
+- Supported suffixes: `.mp3 .mp4 .wav .flac .ogg .m4a .aac .aiff .au` (others → error response).
 
-## CQT (librosa)
-- function: <librosa.cqt / hybrid_cqt / pseudo_cqt>
-- hop_length: 8820 (200 ms) (repo docs)
-- n_bins: 105 (repo docs) → model input 104: <which bin is dropped and where in code>
-- bins_per_octave: 24 (repo docs)
-- fmin: 65 Hz (C2) (repo docs) — confirm exact value (65.0 vs librosa.note_to_hz("C2") = 65.406)
-- window / filter_scale / norm / sparsity / tuning: <fill>
-- magnitude: <abs? power?>; scaling: <log1p? amplitude_to_db(ref=?)? none?>
-- per-file normalisation: <fill>
-- dtype at model input: float32, shape (1, 1, 104, T)
+## CQT (librosa 0.11.0)
+```python
+cqt  = librosa.cqt(waveform, sr=44100, hop_length=8820, n_bins=105, bins_per_octave=24, fmin=65)
+spec = np.log1p(np.abs(cqt))
+chunk = spec[:, 0:-2]                       # comment upstream says "Remove last frequency bin"
+tensor = torch.tensor(chunk, dtype=float32).unsqueeze(0)   # (1, 105, T-2), then .unsqueeze(0) for batch
+```
+- function: `librosa.cqt` (all other arguments at librosa 0.11.0 defaults: `tuning=0.0`,
+  `filter_scale=1`, `norm=1`, `sparsity=0.01`, `window='hann'`, `scale=True`, `pad_mode='constant'`,
+  `res_type='soxr_hq'`).
+- hop_length 8820 (200 ms), n_bins 105, bins_per_octave 24, **fmin = 65.0 Hz exactly** (not
+  `note_to_hz('C2')` = 65.406; the grid is ~10.6 cents flat of equal temperament).
+- magnitude: `abs`; scaling: `log1p`; **no per-file normalisation** of the spectrogram.
+- ⚠ **Which bin is dropped: none.** `spec[:, 0:-2]` slices axis 1 of a `(105, T)` array, i.e. it
+  drops the **last two time frames**, not a frequency bin. The model input is `(B, 1, 105, T-2)`;
+  `model.py`'s own smoke test uses `torch.randn(2, 1, 105, 100)`. The skill's "model consumes 104
+  bins" is therefore wrong for openkeyscan3 at this commit; Phase B must export with 105 bins.
+- model: all-convolutional, `AdaptiveAvgPool2d((1,1))` → any T works. Output: 24 logits;
+  the server takes `argmax` only (no softmax / scores are returned).
 
-## Server protocol (openkeyscan_analyzer_server.py)
-- Request line:  {"id": "<string>", "path": "<absolute path>"}
-- Response line: <paste exact JSON keys observed; note whether per-class scores are included>
-- Ready signal: <how does the server announce readiness — line on stdout? immediate?>
-- Error shape: <fill>
+## Server protocol (openkeyscan_analyzer_server.py) — verified
+- Command line: `openkeyscan-analyzer [-m MODEL] [--device cpu|cuda|mps] [-w WORKERS]`.
+  Without `--device` it auto-selects CUDA > MPS > CPU. We pass `-w 1 --device mps` on Apple
+  Silicon and `-w 1 --device cpu` elsewhere.
+- Request line (stdin): `{"id": "<string>", "path": "<absolute path>"}`
+  (also `{"type": "reset"}` → `{"type": "reset_complete"|"reset_idle", "generation": n}`; unused).
+- Ready signal: one stdout line `{"type": "ready"}` after models are preloaded and a CQT warm-up
+  ran; then `{"type": "heartbeat"}` every 30 s. Logs go to stderr.
+- Success line:
+  `{"id", "status": "success", "camelot": "8A", "openkey": "1m", "key": "A minor", "class_id": 7, "filename", "generation"}`
+  `key` lists enharmonic names joined by `/` and sorted (e.g. `"Ab minor/G# minor"`).
+  **No per-class scores or probabilities** → our `KeyResult`: top3 = [argmax], score 1.0,
+  margin 1.0, `scoresAvailable = false`.
+- Error line: `{"id", "status": "error", "error": "<message>", "filename", "generation"}`
+  (e.g. `"File not found"`, `"Unsupported format. Supported: ..."`, exception text).
+- Responses can arrive out of order (thread pool); match by `id`.
 
 ## Class index → key mapping
-| idx | traditional | camelot | openkey |
-|-----|-------------|---------|---------|
-| 0   | <fill>      |         |         |
-| ... |             |         |         |
-| 23  | <fill>      |         |         |
+`camelot_output()`: number = `class % 12 + 1`, letter = `'A' if class < 12 else 'B'`;
+names from `dataset.py` `CAMELOT_MAPPING`. Implemented in `OpenKeyScanProtocol.cpp`, tested for
+all 24 classes; the client also rejects a reply whose `camelot` disagrees with `class_id`.
 
-Golden: tests/fixtures/house_124_Amin.wav → A minor → 8A → 1m
+| idx | traditional | camelot | openkey |   | idx | traditional | camelot | openkey |
+|-----|-------------|---------|---------|---|-----|-------------|---------|---------|
+| 0   | G#/Ab minor | 1A      | 6m      |   | 12  | B major     | 1B      | 6d      |
+| 1   | D#/Eb minor | 2A      | 7m      |   | 13  | F#/Gb major | 2B      | 7d      |
+| 2   | A#/Bb minor | 3A      | 8m      |   | 14  | C#/Db major | 3B      | 8d      |
+| 3   | F minor     | 4A      | 9m      |   | 15  | G#/Ab major | 4B      | 9d      |
+| 4   | C minor     | 5A      | 10m     |   | 16  | D#/Eb major | 5B      | 10d     |
+| 5   | G minor     | 6A      | 11m     |   | 17  | A#/Bb major | 6B      | 11d     |
+| 6   | D minor     | 7A      | 12m     |   | 18  | F major     | 7B      | 12d     |
+| 7   | A minor     | 8A      | 1m      |   | 19  | C major     | 8B      | 1d      |
+| 8   | E minor     | 9A      | 2m      |   | 20  | G major     | 9B      | 2d      |
+| 9   | B minor     | 10A     | 3m      |   | 21  | D major     | 10B     | 3d      |
+| 10  | F#/Gb minor | 11A     | 4m      |   | 22  | A major     | 11B     | 4d      |
+| 11  | C#/Db minor | 12A     | 5m      |   | 23  | E major     | 12B     | 5d      |
 
----
-Status (M1): **not started.** Phase A (sidecar) needs the OpenKeyScan analyzer bundle, which is not in
-the AGENTS.md stack table; it is waiting for dependency approval. Until then `makeKeyDetector` maps
-`KEY_BACKEND=sidecar|onnx` to the chroma backend and returns a warning.
+Golden: tests/fixtures/house_124_Amin.wav → A minor → 8A → 1m (class 7)
+
+## Phase A end-to-end check (2026-11-04, Linux x86-64, 4 vCPU, server run from source, CPU)
+Server = `openkeyscan_analyzer_server.py` @ pinned commit in a Python 3.12 venv with the manifest pins
+(PyPI torch 2.2.2+cu121 running on CPU), driven by `KeyDetectorSidecar` via
+`KEY_BACKEND=sidecar OPENKEYSCAN_SIDECAR=<venv>/bin/python OPENKEYSCAN_SIDECAR_ARGS=<server.py>`.
+- "ready": 3.0–4.8 s (skill target < 5 s). The very first run after `pip install` took ~25 s
+  (one-off bytecode/JIT cache warm-up) — a PyInstaller bundle should not show this, but check on a
+  clean Mac.
+- Per request: 0.12–0.48 s (librosa.load 0.13 s, CQT 0.18 s, inference 0.09 s on a 62 s file).
+- Keys on the **synthetic** fixtures: house 8B (exp. 8A), techno 4A ✓, pop 8A (exp. 8B),
+  loop 9A (exp. 9B), bass stem 8B (exp. 7A). Three are relative-key swaps: the synthetic loops are
+  harmonically ambiguous by construction (e.g. Am-F-C-G = C major's vi-IV-I-V). These numbers say
+  nothing about real-music accuracy; judge Phase A on real fixtures and the GiantSteps nightly.

@@ -147,13 +147,18 @@ void MainComponent::onImported (ImportJobResult r)
                            << theory::camelot (a.key.top3[0].key) << " / " << theory::openKey (a.key.top3[0].key) << ")";
             if (a.key.lowConfidence)
                 analysisStatus << "  [low confidence]";
-            analysisStatus << "   alternatives: ";
-            for (size_t i = 1; i < a.key.top3.size(); ++i)
-                analysisStatus << theory::camelot (a.key.top3[i].key) << (i + 1 < a.key.top3.size() ? ", " : "");
+            if (a.key.scoresAvailable && a.key.top3.size() > 1) // the sidecar returns no alternatives
+            {
+                analysisStatus << "   alternatives: ";
+                for (size_t i = 1; i < a.key.top3.size(); ++i)
+                    analysisStatus << theory::camelot (a.key.top3[i].key) << (i + 1 < a.key.top3.size() ? ", " : "");
+            }
         }
         analysisStatus << "\nTempo: " << juce::String (a.rhythm.bpm, 2) << " BPM"
                        << (a.rhythm.fixedTempo ? " (fixed grid)" : "") << ", " << (int) a.rhythm.bars.size() << " bars";
-        if (keyDetector.warning.isNotEmpty())
+        if (a.key.warning.isNotEmpty())
+            analysisStatus << "\n" << a.key.warning;
+        else if (keyDetector.warning.isNotEmpty())
             analysisStatus << "\n" << keyDetector.warning;
     }
     updateStatus();
