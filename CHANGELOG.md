@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### key-detection-openkeyscan Phase B (native ONNX)
+- `ml/export_openkeyscan.py`: upstream `eval.load_model()` (pinned checkout via `ml/openkeyscan_source.py`) →
+  `torch.onnx.export` (opset 17, dynamic time axis, input `cqt` (1,1,105,T) → `logits` (1,24)) → onnxsim.
+  Parity PyTorch vs ORT: max |Δlogits| 1.4e-6 (threshold 1e-4); export is deterministic, sha256 pinned in
+  `models/manifest.json`. `make models` verifies / exports `build/models/openkeyscan3.onnx`.
+- `ml/tests/cqt_reference.py`: upstream `preprocess_audio()` → reference CQT + PyTorch logits (.npy).
+- `engine/dsp/CQT`: port of librosa 0.11.0 `cqt` for the model's configuration (two 2:1 decimations at hop 8820,
+  sparse FFT basis, √length scaling). Matches librosa within 9.1e-6 (threshold 1e-3) on all fixtures.
+- `KeyDetectorOnnx`: ORT session (CoreML EP → CPU on macOS), sha256-verified model, softmax → real top3 + margin
+  (`scoresAvailable = true`), < 30 s chroma ensemble, chroma fallback with a warning. ORT session 93 ms; whole
+  detector ~250 ms; key for a 62 s file ~470 ms (Linux x86, 4 vCPU).
+- Full pipeline (our CQT + ORT) vs PyTorch on librosa input: identical argmax on all fixtures, max |Δlogits| 7.6e-6
+  → Phase B == Phase A argmax.
+- `KEY_BACKEND` default is now `onnx` (falls back to chroma with a "run `make models`" warning when the model is
+  missing); `auto` prefers onnx → sidecar → chroma silently; `chroma` / `sidecar` explicit. Models looked up in
+  `JAUDIOS_MODELS_DIR`, `~/Library/Application Support/JAudios/models`, bundle `Resources/models`, `build/models`.
+- ONNX Runtime 1.19.2 from the official NuGet package (cmake/OnnxRuntime.cmake), copied into app bundles.
+- Resampler: integer-ratio fast path (same kernel, bit-identical output); 2:1 decimation 5× faster.
+- Own SHA-256 (`engine/util/Sha256`) for model verification (juce::SHA256 took ~280 ms on the 18.8 MB model).
+- Model-backend golden cases are `[!mayfail]` while fixtures are synthetic (failures still printed).
+
 ### key-detection-openkeyscan Phase A (sidecar)
 - `engine/analysis/openkeyscan`: `OpenKeyScanProtocol` (NDJSON parsing, class index ↔ key exactly as upstream
   `camelot_output()`, request builder, device arguments), `SidecarProcess` (POSIX fork/exec with stdin/stdout/stderr
@@ -9,7 +30,8 @@
   (lazy start on the Analysis thread, 20 s ready / 30 s request timeouts, kill + restart once then chroma fallback
   with a warning, temp 44.1 kHz/16-bit mono WAV for `analyzeBuffer`, < 30 s ensemble with chroma, stderr → debug log).
 - Server returns argmax only: sidecar results have `scoresAvailable = false`, margin 1.0; GUI hides alternatives.
-- `KEY_BACKEND` default is now `auto` (sidecar when found, else chroma); `OPENKEYSCAN_SIDECAR[_ARGS]` override.
+- `KEY_BACKEND` default stays `chroma`; `auto` (sidecar when found, else chroma) and `sidecar` are opt-in;
+  `OPENKEYSCAN_SIDECAR[_ARGS]` override the executable.
 - `models/manifest.json` (pinned commit + checkpoint sha256), `make models` (`tools/models.py`),
   `ml/sidecar/build_openkeyscan_sidecar.sh` (PyInstaller build from the pinned source), CMake copies the sidecar
   into `Contents/Resources/sidecar/` (macOS) or `resources/sidecar/`.

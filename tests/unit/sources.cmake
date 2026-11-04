@@ -11,4 +11,8 @@ set(JAUDIOS_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/test_key_detection.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_tempo.cpp
     # key-detection-openkeyscan Phase A (sidecar)
-    ${CMAKE_CURRENT_LIST_DIR}/test_openkeyscan.cpp)
+    ${CMAKE_CURRENT_LIST_DIR}/test_openkeyscan.cpp
+    # key-detection-openkeyscan Phase B (ONNX)
+    ${CMAKE_CURRENT_LIST_DIR}/test_cqt.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/test_onnx_key.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/test_sha256.cpp)

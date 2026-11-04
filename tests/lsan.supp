@@ -1,0 +1,6 @@
+# LeakSanitizer suppressions for the Debug (ASan) test run. Keep this list minimal.
+#
+# ONNX Runtime 1.19.2 (prebuilt, uninstrumented) allocates 2 x 32 bytes of process-global state on
+# first session creation and never frees them. Constant per process (does not grow with the number
+# of sessions), allocated from inside libonnxruntime with no JAudios frames on the stack.
+leak:libonnxruntime.so

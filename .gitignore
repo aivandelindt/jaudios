@@ -11,3 +11,7 @@ ml/third_party/
 # Real, self-produced renders should be added with git-lfs: `git add -f tests/fixtures/<name>.wav`.
 /tests/fixtures/*.wav
 /tests/fixtures/*.truth.json
+
+# Models are never committed: `make models` (models/manifest.json)
+/models/*.onnx
+/models/*.pt

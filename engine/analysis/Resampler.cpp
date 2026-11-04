@@ -80,11 +80,36 @@ juce::AudioBuffer<float> resample (const juce::AudioBuffer<float>& input, double
     std::vector<double> weights;
     weights.reserve ((size_t) (2.0 * halfWidth) + 4);
 
+    // Integer decimation ratio (e.g. 2:1): every output lands exactly on an input sample, so the
+    // kernel weights are the same for every output away from the edges. Compute them once.
+    const bool integerStep = step >= 1.0 && step == std::floor (step);
+    std::vector<double> fixedWeights;
+    int fixedRadius = 0;
+    if (integerStep)
+    {
+        fixedRadius = (int) std::floor (halfWidth);
+        for (int j = -fixedRadius; j <= fixedRadius; ++j)
+            fixedWeights.push_back (cutoff * kernel (table, (double) -j * cutoff));
+    }
+
     for (int k = 0; k < numOut; ++k)
     {
         const double t = k * step;
         const int first = std::max (0, (int) std::ceil (t - halfWidth));
         const int last = std::min (numIn - 1, (int) std::floor (t + halfWidth));
+
+        if (integerStep && first == (int) t - fixedRadius && last == (int) t + fixedRadius)
+        {
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                const float* x = input.getReadPointer (ch) + first;
+                double acc = 0.0;
+                for (size_t w = 0; w < fixedWeights.size(); ++w)
+                    acc += fixedWeights[w] * x[w];
+                output.setSample (ch, k, (float) acc);
+            }
+            continue;
+        }
 
         weights.clear();
         for (int n = first; n <= last; ++n)

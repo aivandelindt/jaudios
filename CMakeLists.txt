@@ -14,6 +14,7 @@ endif()
 option(JAUDIOS_BUILD_APP     "Build the JUCE GUI standalone app"                         ON)
 option(JAUDIOS_BUILD_TESTS   "Build Catch2 unit tests"                                   ON)
 option(JAUDIOS_SANITIZE      "Enable -fsanitize=address,undefined in Debug builds"       ON)
+option(JAUDIOS_WITH_ONNXRUNTIME "Build the Phase B ONNX key detector (ONNX Runtime)"           ON)
 option(JAUDIOS_RT_CHECK      "Build the realtime allocation/lock trap (tools/rt_check.sh)" OFF)
 
 # Debug sanitizers (scaffold step 6). Incompatible with the RT allocation trap, which
@@ -26,6 +27,9 @@ endif()
 
 include(cmake/Dependencies.cmake)
 include(cmake/JuceShared.cmake)
+if(JAUDIOS_WITH_ONNXRUNTIME)
+    include(cmake/OnnxRuntime.cmake)
+endif()
 
 add_subdirectory(engine)
 add_subdirectory(app)

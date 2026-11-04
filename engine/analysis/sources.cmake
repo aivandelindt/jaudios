@@ -13,4 +13,8 @@ set(ENGINE_ANALYSIS_SOURCES
     # key-detection-openkeyscan Phase A (sidecar)
     ${CMAKE_CURRENT_LIST_DIR}/openkeyscan/OpenKeyScanProtocol.cpp
     ${CMAKE_CURRENT_LIST_DIR}/openkeyscan/SidecarProcess.cpp
-    ${CMAKE_CURRENT_LIST_DIR}/openkeyscan/KeyDetectorSidecar.cpp)
+    ${CMAKE_CURRENT_LIST_DIR}/openkeyscan/KeyDetectorSidecar.cpp
+    # key-detection-openkeyscan Phase B (ONNX)
+    ${CMAKE_CURRENT_LIST_DIR}/../dsp/CQT.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/openkeyscan/KeyDetectorOnnx.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/../util/Sha256.cpp)

@@ -56,15 +56,19 @@ public:
 };
 
 /** Runtime configuration.
-    KEY_BACKEND = auto | sidecar | onnx | chroma (default auto: sidecar when one is found, else chroma).
+    KEY_BACKEND = onnx | chroma | auto | sidecar (default onnx; without a model it falls back to chroma
+    with a "run `make models`" warning; auto = onnx, else sidecar, else chroma, without warnings).
     OPENKEYSCAN_SIDECAR = executable (default: bundled, then the dev build's build/sidecar/...).
     OPENKEYSCAN_SIDECAR_ARGS = extra leading arguments, space separated (e.g. a server.py when the
-    executable is a Python interpreter). */
+    executable is a Python interpreter).
+    JAUDIOS_MODELS_DIR = where openkeyscan3.onnx lives (default: see modelSearchLocations()).
+    auto prefers onnx, then sidecar, then chroma. */
 struct AppConfig
 {
-    juce::String keyBackend = "auto";
+    juce::String keyBackend = "onnx";
     juce::File sidecarExecutable;
     juce::StringArray sidecarArguments;
+    juce::File modelsDir;
 
     static AppConfig fromEnvironment();
     static AppConfig fromEnvironment (const std::map<juce::String, juce::String>& env);
@@ -84,5 +88,10 @@ KeyDetectorHandle makeKeyDetector (const AppConfig&);
 
 /** Where the sidecar executable is looked for when none is configured (first existing wins). */
 juce::Array<juce::File> sidecarSearchLocations();
+
+/** Where openkeyscan3.onnx is looked for when no models dir is configured (first existing wins):
+    ~/Library/Application Support/JAudios/models (mac; per AGENTS.md) or the platform app-data dir,
+    the app bundle's Resources/models, then the dev build's build/models (`make models`). */
+juce::Array<juce::File> modelSearchLocations();
 
 } // namespace jaudios::analysis

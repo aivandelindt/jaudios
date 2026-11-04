@@ -2,6 +2,7 @@
 
 #include "KeyDetectorChroma.h"
 
+#include "engine/analysis/openkeyscan/KeyDetectorOnnx.h"
 #include "engine/analysis/openkeyscan/KeyDetectorSidecar.h"
 
 namespace jaudios::analysis
@@ -25,6 +26,8 @@ AppConfig AppConfig::fromEnvironment (const std::map<juce::String, juce::String>
         c.keyBackend = it->second.trim().toLowerCase();
     if (auto it = env.find ("OPENKEYSCAN_SIDECAR"); it != env.end() && it->second.isNotEmpty())
         c.sidecarExecutable = juce::File (it->second.trim());
+    if (auto it = env.find ("JAUDIOS_MODELS_DIR"); it != env.end() && it->second.isNotEmpty())
+        c.modelsDir = juce::File (it->second.trim());
     if (auto it = env.find ("OPENKEYSCAN_SIDECAR_ARGS"); it != env.end())
         c.sidecarArguments = juce::StringArray::fromTokens (it->second, " ", "\"");
     c.sidecarArguments.removeEmptyStrings();
@@ -34,7 +37,7 @@ AppConfig AppConfig::fromEnvironment (const std::map<juce::String, juce::String>
 AppConfig AppConfig::fromEnvironment()
 {
     std::map<juce::String, juce::String> env;
-    for (const char* name : { "KEY_BACKEND", "OPENKEYSCAN_SIDECAR", "OPENKEYSCAN_SIDECAR_ARGS" })
+    for (const char* name : { "KEY_BACKEND", "OPENKEYSCAN_SIDECAR", "OPENKEYSCAN_SIDECAR_ARGS", "JAUDIOS_MODELS_DIR" })
     {
         const auto value = juce::SystemStats::getEnvironmentVariable (name, {});
         if (value.isNotEmpty())
@@ -64,17 +67,73 @@ juce::Array<juce::File> sidecarSearchLocations()
     return locations;
 }
 
+juce::Array<juce::File> modelSearchLocations()
+{
+    juce::Array<juce::File> dirs;
+   #if JUCE_MAC
+    dirs.add (juce::File::getSpecialLocation (juce::File::userHomeDirectory).getChildFile ("Library/Application Support/JAudios/models"));
+    const auto exe = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
+    dirs.add (exe.getParentDirectory().getSiblingFile ("Resources").getChildFile ("models"));
+   #else
+    dirs.add (juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("JAudios/models"));
+    dirs.add (juce::File::getSpecialLocation (juce::File::currentExecutableFile).getParentDirectory().getChildFile ("resources/models"));
+   #endif
+   #ifdef JAUDIOS_DEV_MODELS_DIR
+    dirs.add (juce::File (JAUDIOS_DEV_MODELS_DIR));
+   #endif
+    return dirs;
+}
+
+static juce::File findModel (const AppConfig& config)
+{
+    if (config.modelsDir != juce::File())
+        return config.modelsDir.getChildFile ("openkeyscan3.onnx");
+    for (const auto& dir : modelSearchLocations())
+        if (dir.getChildFile ("openkeyscan3.onnx").existsAsFile())
+            return dir.getChildFile ("openkeyscan3.onnx");
+    return {};
+}
+
 KeyDetectorHandle makeKeyDetector (const AppConfig& config)
 {
     KeyDetectorHandle h;
     h.detector = std::make_unique<KeyDetectorChroma>();
     h.backend = KeyBackend::chroma;
 
-    const auto requested = config.keyBackend.trim().toLowerCase();
+    auto requested = config.keyBackend.trim().toLowerCase();
+    if (requested.isEmpty())
+        requested = "onnx"; // default
     if (requested == "chroma")
         return h;
 
-    if (requested == "sidecar" || requested == "auto" || requested.isEmpty())
+    if (requested == "onnx" || requested == "auto")
+    {
+        const auto model = findModel (config);
+        if (model.existsAsFile())
+        {
+            openkeyscan::OnnxConfig oc;
+            oc.modelFile = model;
+            auto onnx = std::make_unique<openkeyscan::KeyDetectorOnnx> (oc);
+            if (onnx->isReady())
+            {
+                h.detector = std::move (onnx);
+                h.backend = KeyBackend::onnx;
+                return h;
+            }
+            if (requested == "onnx")
+            {
+                h.warning = "Key model could not be loaded (" + onnx->loadError() + "); using chroma";
+                return h;
+            }
+        }
+        else if (requested == "onnx")
+        {
+            h.warning = "Key model openkeyscan3.onnx not found (run `make models`); using chroma";
+            return h;
+        }
+    }
+
+    if (requested == "sidecar" || requested == "auto")
     {
         juce::File executable = config.sidecarExecutable;
         if (executable == juce::File())
@@ -103,10 +162,7 @@ KeyDetectorHandle makeKeyDetector (const AppConfig& config)
         return h; // auto: chroma is the expected fallback, no warning
     }
 
-    if (requested == "onnx")
-        h.warning = "KEY_BACKEND=onnx (Phase B) is not implemented yet; using chroma";
-    else
-        h.warning = "Unknown KEY_BACKEND '" + config.keyBackend + "'; using chroma";
+    h.warning = "Unknown KEY_BACKEND '" + config.keyBackend + "'; using chroma";
 
     return h;
 }

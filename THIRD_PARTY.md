@@ -4,12 +4,25 @@
 |----------------------|-----------------------------|------------|-----------------------------------------|-----------------------------|
 | JUCE                 | 8.0.15 (FetchContent, pinned tag) | AGPL/Commercial → **commercial license required before release** (tracked in #TBD) | Raw Material Software | App framework |
 | Catch2               | v3.9.1 (FetchContent, pinned tag) | BSL-1.0 | Catch2 authors | Unit tests only, never shipped |
-| ONNX Runtime         | 1.19.x                      | MIT        | Microsoft Corporation                   | Inference                   |
+| ONNX Runtime         | 1.19.2 — official prebuilt binaries from the `Microsoft.ML.OnnxRuntime` NuGet package (cmake/OnnxRuntime.cmake, sha256 fa133c8f…) | MIT | Microsoft Corporation | Phase B key model inference (CPU; CoreML EP on macOS). Linked dynamically; package ThirdPartyNotices.txt to be shipped with the app |
 | Demucs (htdemucs)    | v4 weights                  | MIT        | Meta Platforms, Inc.                    | Stem separation             |
 | Basic Pitch          | ICASSP 2022 model           | Apache-2.0 | Spotify AB                              | Note transcription          |
 | OpenKeyScan analyzer | commit 6a2915f4 (models/manifest.json; no upstream tags) | MIT | Alexander Sommer (rekordcloud) | Key detection (model + Phase A sidecar). Built from source, not vendored; clone lives in ml/third_party/ (gitignored) |
 | MusicalKeyCNN        | upstream of OpenKeyScan     | MIT        | a1ex90                                  | Model architecture / training code lineage |
 | GiantSteps Key datasets | —                        | CC BY-NC-SA 4.0 (annotations) | Knees et al. / MTG | **Tests only, never shipped** |
+
+### ML export tooling (dev only, ml/; never shipped or linked)
+| Component | Version | License | Used for |
+|---|---|---|---|
+| onnx (Python) | 1.16.2 | Apache-2.0 | required by `torch.onnx.export` (approved 2026-11-04) |
+| onnxsim | 0.6.5 | Apache-2.0 | graph simplification after export (approved 2026-11-04) |
+| onnxruntime (Python) | 1.19.2 | MIT | PyTorch-vs-ORT parity check |
+| PyTorch / librosa / NumPy | see sidecar pins | BSD-3 / ISC / BSD-3 | export + reference CQT (`ml/tests/cqt_reference.py`) |
+
+### Ported code
+| Component | Version | License | Used for |
+|---|---|---|---|
+| librosa `cqt`/`vqt`, `filters.wavelet*`, `util.sparsify_rows` | 0.11.0 | ISC (© librosa development team) | algorithm ported to engine/dsp/CQT.cpp (no code copied verbatim); credit in About |
 
 ### Bundled inside the Phase A sidecar (M1 only; PyInstaller bundle, separate process, removed in M2)
 Pins from models/manifest.json (same as upstream build-linux-x64.sh / Pipfile.lock). Runs as its own
