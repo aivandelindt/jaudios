@@ -100,8 +100,10 @@ KeyDetectorHandle makeKeyDetector (const AppConfig& config)
     h.detector = std::make_unique<KeyDetectorChroma>();
     h.backend = KeyBackend::chroma;
 
-    const auto requested = config.keyBackend.trim().toLowerCase();
-    if (requested == "chroma" || requested.isEmpty())
+    auto requested = config.keyBackend.trim().toLowerCase();
+    if (requested.isEmpty())
+        requested = "onnx"; // default
+    if (requested == "chroma")
         return h;
 
     if (requested == "onnx" || requested == "auto")

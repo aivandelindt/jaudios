@@ -61,8 +61,12 @@ TEST_CASE ("ONNX detector loads the model and is fast to create", "[onnx]")
     const auto& t = detector.loadTimings();
     INFO ("provider " << detector.executionProvider() << ": session " << t.sessionMs << " ms, sha256 " << t.sha256Ms
                       << " ms, CQT basis " << t.cqtBasisMs << " ms, total " << ms << " ms");
+   #if JUCE_DEBUG
+    WARN ("timing not asserted in Debug/sanitizer builds"); // unoptimised: numbers are meaningless
+   #else
     CHECK (t.sessionMs < 300.0); // skill acceptance: < 300 ms session creation
     CHECK (ms < 1000.0);         // whole detector incl. model verification and CQT basis
+   #endif
 }
 
 TEST_CASE ("ONNX detector refuses a model whose sha256 does not match the manifest", "[onnx]")
@@ -164,9 +168,24 @@ TEST_CASE ("makeKeyDetector: onnx backend and auto preference", "[onnx][factory]
         CHECK (d.backend == KeyBackend::chroma);
         CHECK (d.warning.contains ("model"));
     }
-    SECTION ("default is still chroma")
+    SECTION ("default is onnx; without a model it is chroma with a warning")
     {
-        CHECK (makeKeyDetector (AppConfig {}).backend == KeyBackend::chroma);
+        REQUIRE_MODEL();
+        AppConfig withModel;
+        withModel.modelsDir = devModel().getParentDirectory();
+        CHECK (makeKeyDetector (withModel).backend == KeyBackend::onnx);
+
+        test::TempDir tmp;
+        AppConfig noModel;
+        noModel.modelsDir = tmp.dir;
+        const auto d = makeKeyDetector (noModel);
+        CHECK (d.backend == KeyBackend::chroma);
+        CHECK (d.warning.contains ("make models"));
+
+        AppConfig empty;
+        empty.keyBackend = "";
+        empty.modelsDir = withModel.modelsDir;
+        CHECK (makeKeyDetector (empty).backend == KeyBackend::onnx);
         CHECK (AppConfig::fromEnvironment ({ { "JAUDIOS_MODELS_DIR", "/opt/m" } }).modelsDir.getFullPathName() == "/opt/m");
     }
 }

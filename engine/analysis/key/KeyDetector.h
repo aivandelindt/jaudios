@@ -56,7 +56,8 @@ public:
 };
 
 /** Runtime configuration.
-    KEY_BACKEND = chroma | auto | sidecar | onnx (default chroma; auto = sidecar when one is found, else chroma).
+    KEY_BACKEND = onnx | chroma | auto | sidecar (default onnx; without a model it falls back to chroma
+    with a "run `make models`" warning; auto = onnx, else sidecar, else chroma, without warnings).
     OPENKEYSCAN_SIDECAR = executable (default: bundled, then the dev build's build/sidecar/...).
     OPENKEYSCAN_SIDECAR_ARGS = extra leading arguments, space separated (e.g. a server.py when the
     executable is a Python interpreter).
@@ -64,7 +65,7 @@ public:
     auto prefers onnx, then sidecar, then chroma. */
 struct AppConfig
 {
-    juce::String keyBackend = "chroma";
+    juce::String keyBackend = "onnx";
     juce::File sidecarExecutable;
     juce::StringArray sidecarArguments;
     juce::File modelsDir;

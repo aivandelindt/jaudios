@@ -168,7 +168,7 @@ TEST_CASE ("makeKeyDetector honours KEY_BACKEND and falls back to chroma", "[key
     SECTION ("environment variable")
     {
         CHECK (AppConfig::fromEnvironment ({ { "KEY_BACKEND", "onnx" } }).keyBackend == "onnx");
-        CHECK (AppConfig::fromEnvironment ({}).keyBackend == "chroma");
+        CHECK (AppConfig::fromEnvironment ({}).keyBackend == "onnx");
     }
 }
 

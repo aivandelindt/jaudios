@@ -15,7 +15,8 @@
   detector ~250 ms; key for a 62 s file ~470 ms (Linux x86, 4 vCPU).
 - Full pipeline (our CQT + ORT) vs PyTorch on librosa input: identical argmax on all fixtures, max |Δlogits| 7.6e-6
   → Phase B == Phase A argmax.
-- `KEY_BACKEND=onnx`; `auto` prefers onnx → sidecar → chroma. Default stays chroma. Models looked up in
+- `KEY_BACKEND` default is now `onnx` (falls back to chroma with a "run `make models`" warning when the model is
+  missing); `auto` prefers onnx → sidecar → chroma silently; `chroma` / `sidecar` explicit. Models looked up in
   `JAUDIOS_MODELS_DIR`, `~/Library/Application Support/JAudios/models`, bundle `Resources/models`, `build/models`.
 - ONNX Runtime 1.19.2 from the official NuGet package (cmake/OnnxRuntime.cmake), copied into app bundles.
 - Resampler: integer-ratio fast path (same kernel, bit-identical output); 2:1 decimation 5× faster.
