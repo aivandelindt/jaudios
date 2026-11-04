@@ -71,10 +71,10 @@ KeyDetectorHandle makeKeyDetector (const AppConfig& config)
     h.backend = KeyBackend::chroma;
 
     const auto requested = config.keyBackend.trim().toLowerCase();
-    if (requested == "chroma")
+    if (requested == "chroma" || requested.isEmpty())
         return h;
 
-    if (requested == "sidecar" || requested == "auto" || requested.isEmpty())
+    if (requested == "sidecar" || requested == "auto")
     {
         juce::File executable = config.sidecarExecutable;
         if (executable == juce::File())
