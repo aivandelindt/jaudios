@@ -1,0 +1,37 @@
+{
+  "fixtures": [
+    {
+      "file": "tests/fixtures/house_124_Amin.wav",
+      "tempo": { "bpm": 124.0, "tolerance_pct": 2.0 },
+      "key": { "camelot": "8A", "traditional": "A minor", "openkey": "1m", "min_margin": 0.20 },
+      "chords": "tests/fixtures/house_124_Amin.chords.json"
+    },
+    {
+      "file": "tests/fixtures/techno_132_Fmin.wav",
+      "tempo": { "bpm": 132.0, "tolerance_pct": 2.0 },
+      "key": { "camelot": "4A", "traditional": "F minor", "openkey": "9m", "min_margin": 0.20 },
+      "chords": "tests/fixtures/techno_132_Fmin.chords.json"
+    },
+    {
+      "file": "tests/fixtures/pop_100_Cmaj.wav",
+      "tempo": { "bpm": 100.0, "tolerance_pct": 2.0 },
+      "key": { "camelot": "8B", "traditional": "C major", "openkey": "1d", "min_margin": 0.20 },
+      "chords": "tests/fixtures/pop_100_Cmaj.chords.json"
+    },
+    {
+      "file": "tests/fixtures/loop_8bar_Gmaj.wav",
+      "tempo": { "bpm": 120.0, "tolerance_pct": 2.0 },
+      "key": { "camelot": "9B", "traditional": "G major", "openkey": "2d", "min_margin": 0.0, "allow_fallback": true },
+      "chords": null,
+      "note": "< 30 s: exercises the ensemble path; argmax must still be 9B via top3[0] or top3[1]"
+    },
+    {
+      "file": "tests/fixtures/stem_bass_Dmin.wav",
+      "tempo": null,
+      "key": { "camelot": "7A", "traditional": "D minor", "openkey": "12m", "min_margin": 0.0, "allow_fallback": true },
+      "chords": null
+    }
+  ],
+  "key_backends_in_pr_ci": ["chroma"],
+  "key_backends_in_nightly": ["sidecar", "onnx", "chroma"]
+}
