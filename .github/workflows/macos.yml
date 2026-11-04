@@ -1,6 +1,9 @@
-# macOS / Apple Silicon is the product target (AGENTS.md). This job builds and tests JAudios on a
-# GitHub-hosted arm64 Mac so every PR is checked on the real platform, including the CoreML
+# macOS / Apple Silicon is the product target (AGENTS.md). The macos job builds and tests JAudios on
+# a GitHub-hosted arm64 Mac so every PR is checked on the real platform, including the CoreML
 # execution provider and the app bundle layout.
+#
+# The key model is exported once on Linux (the job reproduces the sha256 pinned in
+# models/manifest.json) and handed to the macOS job, so macOS tests the exact file users ship.
 name: macOS (Apple Silicon)
 
 on:
@@ -13,12 +16,57 @@ concurrency:
   group: macos-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  ML_VENV: ${{ github.workspace }}/../jaudios-ml-venv
+
 jobs:
-  build-test:
+  model:
+    name: Export key model (Linux, canonical)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache ML env
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.ML_VENV }}
+          key: ml-venv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('models/manifest.json') }}
+
+      - name: ML env (pins from models/manifest.json)
+        run: |
+          [ -x "$ML_VENV/bin/python" ] || python3.12 -m venv "$ML_VENV"
+          PINS=$(python3 -c "import json; m=json.load(open('models/manifest.json')); p={**m['openkeyscan_sidecar']['build']['pins'], **m['openkeyscan3_onnx']['export']['pins']}; print(' '.join(f'{k}=={v}' for k,v in p.items() if k not in ('python','pyinstaller','pyinstaller-hooks-contrib')))")
+          "$ML_VENV/bin/pip" install -q $PINS tqdm
+
+      - name: Linux build deps for the fixture renderer
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build libasound2-dev libfreetype-dev libfontconfig1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxcomposite-dev libxext-dev
+
+      - name: Render fixtures (needed by the parity check)
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DJAUDIOS_BUILD_TESTS=OFF -DJAUDIOS_BUILD_APP=OFF
+          cmake --build build --target fixtures
+
+      - name: Export + parity + sha256 check against the manifest
+        env:
+          PYTHONFAULTHANDLER: "1"
+        run: python3 tools/models.py --only onnx --python "$ML_VENV/bin/python"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openkeyscan3-onnx
+          path: build/models/openkeyscan3.onnx
+          if-no-files-found: error
+
+  macos:
+    name: Build + test (macos-15, arm64)
+    needs: model
     runs-on: macos-15 # arm64 (Apple Silicon)
     timeout-minutes: 120
-    env:
-      ML_VENV: ${{ github.workspace }}/../jaudios-ml-venv
     steps:
       - uses: actions/checkout@v4
 
@@ -44,7 +92,6 @@ jobs:
         run: |
           [ -x "$ML_VENV/bin/python" ] || python3.12 -m venv "$ML_VENV"
           PINS=$(python3 -c "import json; m=json.load(open('models/manifest.json')); p={**m['openkeyscan_sidecar']['build']['pins'], **m['openkeyscan3_onnx']['export']['pins']}; print(' '.join(f'{k}=={v}' for k,v in p.items() if k not in ('python','pyinstaller','pyinstaller-hooks-contrib')))")
-          echo "$PINS"
           "$ML_VENV/bin/pip" install -q $PINS tqdm
 
       - name: Configure (Release)
@@ -56,11 +103,14 @@ jobs:
       - name: Render fixtures
         run: cmake --build build --target fixtures
 
-      - name: Export ONNX model (parity-checked)
-        # Non-fatal on purpose for now: a sha256 that differs from the Linux-pinned one is itself a
-        # finding (onnxsim constant folding on arm64), and the remaining steps should still report.
-        continue-on-error: true
-        run: python3 tools/models.py --only onnx --python "$ML_VENV/bin/python"
+      - name: Canonical key model (from the Linux job)
+        uses: actions/download-artifact@v4
+        with:
+          name: openkeyscan3-onnx
+          path: build/models
+
+      - name: Verify model against the manifest
+        run: python3 tools/models.py --only onnx
 
       - name: Test
         run: ctest --test-dir build --output-on-failure
@@ -81,3 +131,11 @@ jobs:
 
       - name: Realtime check
         run: tools/rt_check.sh
+
+      - name: Diagnose a local macOS export (known to segfault; does not affect the tests above)
+        continue-on-error: true
+        env:
+          PYTHONFAULTHANDLER: "1"
+        run: |
+          "$ML_VENV/bin/python" ml/export_openkeyscan.py --out "$RUNNER_TEMP/mac-export.onnx" tests/fixtures/*.wav
+          shasum -a 256 "$RUNNER_TEMP/mac-export.onnx" build/models/openkeyscan3.onnx

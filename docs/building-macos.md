@@ -5,8 +5,8 @@ same on an M1 through M5. Intel Macs and universal (arm64 + x86_64) builds are n
 
 > Verification status: these steps are exercised on every PR by the
 > [macOS (Apple Silicon) workflow](../.github/workflows/macos.yml) on GitHub's `macos-15` arm64
-> runners. That runner is a VM, so it does not have the Neural Engine; check CoreML performance on
-> a real Mac.
+> runners (macOS 15, Xcode 16.4). That runner is a VM, so it does not have the Neural Engine;
+> check CoreML performance on a real Mac.
 
 ## 1. Prerequisites
 
@@ -57,7 +57,28 @@ The ONNX Runtime dylib is copied into `JAudios.app/Contents/Frameworks/` automat
 
 Without the model, key detection falls back to the built-in chroma detector and prints
 "Key model openkeyscan3.onnx not found (run `make models`); using chroma". There is no hosted
-download yet, so export it once from the pinned upstream checkpoint.
+download yet. The model must be byte-identical to the one pinned in `models/manifest.json`
+(sha256 `2762d4a0…`); the app refuses any other file.
+
+> Known issue: exporting the model *on* an Apple Silicon Mac currently crashes (SIGSEGV after
+> `torch.onnx.export`, inside the onnxsim / onnx / onnxruntime Python packages; being
+> investigated in CI). Use one of the two routes below instead.
+
+**Route A: download the canonical model from CI.** Every CI run exports it on Linux, checks it
+against the manifest, and uploads it as the `openkeyscan3-onnx` artifact. With the GitHub CLI:
+
+```bash
+gh run download --repo aivandelindt/jaudios --name openkeyscan3-onnx --dir build/models "$(gh run list --repo aivandelindt/jaudios --workflow macos.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
+```
+
+Then verify it against the manifest:
+
+```bash
+python3 tools/models.py --only onnx
+```
+
+**Route B: export it on a Linux x86-64 machine** with the Python environment below, and copy
+`build/models/openkeyscan3.onnx` to the Mac.
 
 Create a Python 3.12 environment with the pins from `models/manifest.json`:
 
@@ -80,6 +101,9 @@ Export, verify parity (PyTorch vs ONNX Runtime) and write `build/models/openkeys
 ```bash
 python3 tools/models.py --only onnx --python ~/.venvs/jaudios-ml/bin/python
 ```
+
+The same environment works on the Mac for the ML reference tests (section 5); only the export
+step crashes there.
 
 The app finds the model in, first match wins:
 
@@ -172,6 +196,7 @@ Signing and notarizing the sidecar is covered by the packaging-and-release skill
 |---|---|
 | `Library not loaded: @rpath/libonnxruntime.1.19.2.dylib` | Re-configure and rebuild; the dylib is staged under its install name in `build/onnxruntime/lib/` and copied into the app bundle. |
 | Key backend is `chroma` with "model not found" | Export the model (section 3) or set `JAUDIOS_MODELS_DIR`. |
-| "key model sha256 mismatch" | The model file is not the one pinned in `models/manifest.json`. Re-run section 3; report it if a fresh export on your Mac still mismatches. |
+| "key model sha256 mismatch" | The model file is not the one pinned in `models/manifest.json` (for example an unsimplified file left behind by a crashed export). Use route A or B in section 3. |
+| Export dies with `SIGSEGV` on the Mac | Known issue (section 3); use route A or B. |
 | CMake picks `osx-x64` / the app runs under Rosetta | You are using x86_64 tools; see the `uname -m` check in section 1. |
 | `cmake: CMake 3.25 or higher is required` | `brew upgrade cmake`. |

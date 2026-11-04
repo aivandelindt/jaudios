@@ -11,7 +11,10 @@
   The trap now registers itself from a static initializer in RealtimeTrapHooks.cpp.
 - CI: `.github/workflows/macos.yml` builds and tests on GitHub's `macos-15` arm64 runners (Release build, ML env
   from the manifest pins, ONNX export, full ctest incl. CQT/ONNX goldens, app bundle checks, CLI run, rt_check).
-- Docs: `docs/building-macos.md`.
+- CI: the key model is exported once on Linux (reproducing the manifest sha256) and handed to the macOS job as the
+  `openkeyscan3-onnx` artifact, so macOS tests the shipped file. Exporting on macOS arm64 currently segfaults
+  (second CI run); the macOS job keeps a non-fatal export attempt with faulthandler for diagnosis.
+- Docs: `docs/building-macos.md` (model via the CI artifact or a Linux export until the macOS export is fixed).
 - Test: the ONNX session-creation timing is measured after one warm-up construction (the first one also pays for
   loading the dylib and a cold disk cache, which flaked right after a rebuild).
 
