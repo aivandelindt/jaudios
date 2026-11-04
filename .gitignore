@@ -1,0 +1,13 @@
+/build*/
+/cmake-build-*/
+.DS_Store
+*.swp
+compile_commands.json
+__pycache__/
+ml/datasets/
+ml/third_party/
+
+# Synthetic fixtures are rendered by `cmake --build build --target fixtures` (tools/fixtures).
+# Real, self-produced renders should be added with git-lfs: `git add -f tests/fixtures/<name>.wav`.
+/tests/fixtures/*.wav
+/tests/fixtures/*.truth.json
