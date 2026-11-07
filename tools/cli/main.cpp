@@ -7,6 +7,10 @@
 //   app-cli separate <audio-file> [--out DIR] [--guide other+vocals] [--no-cache]
 //                                               4 stems (HT-Demucs) + guide.wav in DIR, JSON report;
 //                                               stems are cached by audio SHA-256 (StemCache)
+//   app-cli transcribe <audio-file> [--stem mix|drums|bass|other|vocals|guide] [--mono|--poly]
+//                      [--quantize 4|8|16|32|off] [--onset T] [--frame T] [--min-ms MS] [--out FILE.mid] [--no-cache]
+//                                               Basic Pitch notes as JSON + a MIDI file (bass stem: monophonic,
+//                                               default 1/16 quantise on the detected beat grid, swing kept)
 
 #include "app/core/AnalysisService.h"
 #include "app/core/AudioEngine.h"
@@ -17,6 +21,9 @@
 #include "engine/analysis/key/KeyDetector.h"
 #include "engine/analysis/stems/StemCache.h"
 #include "engine/analysis/stems/StemSeparator.h"
+#include "engine/analysis/tempo/BeatTracker.h"
+#include "engine/analysis/transcription/AudioToMidi.h"
+#include "engine/analysis/transcription/Quantize.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_events/juce_events.h>
@@ -51,7 +58,9 @@ int usage()
                  "  app-cli render  <audio-file> [--block N]\n"
                  "  app-cli analyze <audio-file>\n"
                  "  app-cli separate <audio-file> [--out DIR] [--guide other+vocals] [--no-cache]\n"
-                 "                   (default DIR: <file name>.stems/ next to the file; cache: JAUDIOS_STEM_CACHE_DIR)\n";
+                 "                   (default DIR: <file name>.stems/ next to the file; cache: JAUDIOS_STEM_CACHE_DIR)\n"
+                 "  app-cli transcribe <audio-file> [--stem mix|drums|bass|other|vocals|guide] [--mono|--poly]\n"
+                 "                   [--quantize 4|8|16|32|off] [--onset T] [--frame T] [--min-ms MS] [--out FILE.mid] [--no-cache]\n";
     return 2;
 }
 
@@ -205,6 +214,66 @@ void writeWav (const juce::File& dest, const juce::AudioBuffer<float>& b, double
     }
 }
 
+/** Stems for a capture, from the stem cache or HT-Demucs; on the AnalysisService worker like the app. */
+struct SeparationRun
+{
+    std::optional<jaudios::analysis::stems::StemSeparator::Result> result;
+    juce::String provider, origin, error, key;
+    double loadMs = 0.0;
+    bool cacheHit = false;
+    bool ok() const { return result && result->stems; }
+};
+
+SeparationRun runSeparation (const jaudios::analysis::CaptureResult& capture, bool useCache)
+{
+    using namespace jaudios::analysis;
+    SeparationRun run;
+    const auto config = AppConfig::fromEnvironment();
+    const auto model = findModelFile (config, "htdemucs.onnx");
+    if (model == juce::File())
+    {
+        run.error = "htdemucs.onnx not found (python3 tools/models.py --only demucs --python <env>, or set JAUDIOS_MODELS_DIR)";
+        return run;
+    }
+    const auto cacheDirEnv = juce::SystemStats::getEnvironmentVariable ("JAUDIOS_STEM_CACHE_DIR", {});
+    const stems::StemCache cache (cacheDirEnv.isNotEmpty() ? juce::File (cacheDirEnv) : stems::StemCache::defaultDirectory());
+
+    jaudios::AnalysisService service;
+    service.submit<stems::StemSeparator::Result> (
+        [&] {
+            const auto t0 = juce::Time::getMillisecondCounterHiRes();
+            stems::StemSeparator sep ({ model, config.onnxCoreML });
+            run.loadMs = juce::Time::getMillisecondCounterHiRes() - t0;
+            run.provider = sep.executionProvider();
+            run.origin = sep.modelOrigin();
+            if (! sep.isReady())
+                return stems::StemSeparator::Result { {}, sep.loadError() };
+
+            run.key = stems::StemCache::keyFor (capture.buffer, capture.sampleRate, sep.cacheId());
+            if (useCache)
+                if (auto cached = cache.load (run.key))
+                {
+                    run.cacheHit = true;
+                    stems::StemSeparator::Result r;
+                    r.stems = std::move (cached);
+                    return r;
+                }
+
+            auto r = sep.separate (capture.buffer, capture.sampleRate, [] (double p) {
+                std::cerr << "\rseparating " << juce::roundToInt (p * 100.0) << " %" << std::flush;
+            });
+            std::cerr << "\n";
+            if (useCache && r.stems && cache.store (run.key, *r.stems))
+                cache.prune();
+            return r;
+        },
+        [&] (stems::StemSeparator::Result r) { run.result = std::move (r); });
+    service.waitUntilIdle();
+    if (! run.ok() && run.error.isEmpty())
+        run.error = run.result ? run.result->error : juce::String ("separation did not run");
+    return run;
+}
+
 int cmdSeparate (const juce::File& file, juce::File outDir, const jaudios::analysis::stems::GuideSelection& guide, bool useCache)
 {
     using namespace jaudios::analysis;
@@ -215,59 +284,19 @@ int cmdSeparate (const juce::File& file, juce::File outDir, const jaudios::analy
     if (outDir == juce::File())
         outDir = file.getSiblingFile (file.getFileNameWithoutExtension() + ".stems");
 
-    const auto config = AppConfig::fromEnvironment();
-    const auto model = findModelFile (config, "htdemucs.onnx");
-    if (model == juce::File())
+    const auto run = runSeparation (*capture, useCache);
+    if (! run.ok())
     {
-        std::cerr << "error: htdemucs.onnx not found (python3 tools/models.py --only demucs --python <env>, or set JAUDIOS_MODELS_DIR)\n";
+        std::cerr << "error: " << run.error << "\n";
         return 1;
     }
-    const auto cacheDirEnv = juce::SystemStats::getEnvironmentVariable ("JAUDIOS_STEM_CACHE_DIR", {});
-    const stems::StemCache cache (cacheDirEnv.isNotEmpty() ? juce::File (cacheDirEnv) : stems::StemCache::defaultDirectory());
-
-    // Same threading as the app: model load, cache and separation on the AnalysisService worker.
-    jaudios::AnalysisService service;
-    std::optional<stems::StemSeparator::Result> result;
-    juce::String provider, origin, loadError, key;
-    double loadMs = 0.0;
-    bool cacheHit = false;
-    service.submit<stems::StemSeparator::Result> (
-        [&] {
-            const auto t0 = juce::Time::getMillisecondCounterHiRes();
-            stems::StemSeparator sep ({ model, config.onnxCoreML });
-            loadMs = juce::Time::getMillisecondCounterHiRes() - t0;
-            provider = sep.executionProvider();
-            origin = sep.modelOrigin();
-            loadError = sep.loadError();
-            if (! sep.isReady())
-                return stems::StemSeparator::Result { {}, loadError };
-
-            key = stems::StemCache::keyFor (capture->buffer, capture->sampleRate, sep.cacheId());
-            if (useCache)
-                if (auto cached = cache.load (key))
-                {
-                    cacheHit = true;
-                    stems::StemSeparator::Result r;
-                    r.stems = std::move (cached);
-                    return r;
-                }
-
-            auto r = sep.separate (capture->buffer, capture->sampleRate, [] (double p) {
-                std::cerr << "\rseparating " << juce::roundToInt (p * 100.0) << " %" << std::flush;
-            });
-            std::cerr << "\n";
-            if (useCache && r.stems && cache.store (key, *r.stems))
-                cache.prune();
-            return r;
-        },
-        [&] (stems::StemSeparator::Result r) { result = std::move (r); });
-    service.waitUntilIdle();
-
-    if (! result || ! result->stems)
-    {
-        std::cerr << "error: " << (result && result->error.isNotEmpty() ? result->error : loadError) << "\n";
-        return 1;
-    }
+    const auto& result = run.result;
+    const auto& provider = run.provider;
+    const auto& origin = run.origin;
+    const auto& key = run.key;
+    const auto loadMs = run.loadMs;
+    const auto cacheHit = run.cacheHit;
+    const auto model = findModelFile (AppConfig::fromEnvironment(), "htdemucs.onnx");
 
     outDir.createDirectory();
     const auto& st = *result->stems;
@@ -325,6 +354,155 @@ int cmdSeparate (const juce::File& file, juce::File outDir, const jaudios::analy
         { "null_residual_dbfs", rmsDb (residual, 2 * n) },
         { "stems", files },
         { "guide", guide.empty() ? var() : makeObject ({ { "stems", guide.toString() }, { "path", guideFile.getFullPathName() } }) },
+        { "import_ms", importMs },
+    }));
+    return 0;
+}
+
+struct TranscribeOptions
+{
+    juce::String stem = "mix";
+    std::optional<bool> monophonic; // default: on for the bass stem
+    int quantize = 16;              // 0 = off
+    jaudios::analysis::transcription::NoteParams notes;
+    juce::File out;
+    bool useCache = true;
+};
+
+/** Standard MIDI file (format 1, 480 PPQ) at a constant tempo; seconds -> ticks at that tempo. */
+bool writeMidiFile (const juce::File& dest, const juce::MidiMessageSequence& seq, double bpm)
+{
+    constexpr int ppq = 480;
+    const double ticksPerSecond = ppq * bpm / 60.0;
+    juce::MidiMessageSequence track;
+    track.addEvent (juce::MidiMessage::tempoMetaEvent ((int) std::lround (60'000'000.0 / bpm)), 0.0);
+    track.addEvent (juce::MidiMessage::timeSignatureMetaEvent (4, 4), 0.0);
+    for (const auto* e : seq)
+        track.addEvent (e->message, std::round (e->message.getTimeStamp() * ticksPerSecond) - e->message.getTimeStamp());
+    track.updateMatchedPairs();
+    juce::MidiFile file;
+    file.setTicksPerQuarterNote (ppq);
+    file.addTrack (track);
+    dest.getParentDirectory().createDirectory();
+    dest.deleteFile();
+    juce::FileOutputStream out (dest);
+    return out.openedOk() && file.writeTo (out, 1);
+}
+
+int cmdTranscribe (const juce::File& file, TranscribeOptions opt)
+{
+    using namespace jaudios::analysis;
+    namespace tr = jaudios::analysis::transcription;
+    double importMs = 0.0;
+    const auto capture = importOrReport (file, importMs);
+    if (! capture)
+        return 1;
+
+    // what to transcribe: the mix, one stem, or the guide stems
+    juce::AudioBuffer<float> audio = capture->buffer;
+    juce::String separation = "none";
+    if (opt.stem != "mix")
+    {
+        const auto run = runSeparation (*capture, opt.useCache);
+        if (! run.ok())
+        {
+            std::cerr << "error: " << run.error << "\n";
+            return 1;
+        }
+        separation = run.cacheHit ? "cache" : "htdemucs (" + run.provider + ")";
+        const auto& st = *run.result->stems;
+        if (opt.stem == "guide")
+            audio = stems::mixGuide (st);
+        else if (const auto s = stems::stemFromName (opt.stem))
+            audio = st[*s];
+        else
+        {
+            std::cerr << "error: --stem takes mix, drums, bass, other, vocals or guide\n";
+            return 2;
+        }
+    }
+
+    const auto config = AppConfig::fromEnvironment();
+    const auto model = findModelFile (config, "basic_pitch.onnx");
+    if (model == juce::File())
+    {
+        std::cerr << "error: basic_pitch.onnx not found (python3 tools/models.py --only basic_pitch, or set JAUDIOS_MODELS_DIR)\n";
+        return 1;
+    }
+
+    tr::TranscriptionSettings settings;
+    settings.notes = opt.notes;
+    settings.monophonic = opt.monophonic.value_or (opt.stem == "bass");
+
+    // Same threading as the app: beat grid + transcription on the AnalysisService worker.
+    jaudios::AnalysisService service;
+    std::optional<tr::Transcription> result;
+    RhythmResult rhythm;
+    tr::QuantizeResult quantized;
+    service.submit<tr::Transcription> (
+        [&] {
+            juce::AudioBuffer<float> mono (1, capture->buffer.getNumSamples());
+            mono.clear();
+            for (int ch = 0; ch < capture->buffer.getNumChannels(); ++ch)
+                mono.addFrom (0, 0, capture->buffer, ch, 0, mono.getNumSamples(), 1.0f / (float) capture->buffer.getNumChannels());
+            rhythm = analyzeRhythm (mono.getReadPointer (0), mono.getNumSamples(), capture->sampleRate); // grid of the mix
+            tr::AudioToMidi a2m (model);
+            auto t = a2m.transcribe (audio, capture->sampleRate, settings);
+            if (t.ok() && opt.quantize > 0)
+            {
+                tr::QuantizeSettings q;
+                q.division = opt.quantize;
+                quantized = tr::quantize (t.notes, rhythm.beats, q);
+                t.notes = quantized.notes;
+                t.midi = tr::toMidiSequence (t.notes, settings.multiplePitchBends);
+            }
+            return t;
+        },
+        [&] (tr::Transcription t) { result = std::move (t); });
+    service.waitUntilIdle();
+    if (! result || ! result->ok())
+    {
+        std::cerr << "error: " << (result ? result->error : juce::String ("transcription did not run")) << "\n";
+        return 1;
+    }
+
+    if (opt.out == juce::File())
+        opt.out = file.getSiblingFile (file.getFileNameWithoutExtension() + "." + opt.stem + ".mid");
+    const double bpm = rhythm.bpm > 0.0 ? rhythm.bpm : 120.0;
+    if (! writeMidiFile (opt.out, result->midi, bpm))
+    {
+        std::cerr << "error: cannot write " << opt.out.getFullPathName() << "\n";
+        return 1;
+    }
+
+    juce::Array<var> notes;
+    double confidence = 0.0;
+    int lo = 127, hi = 0;
+    for (const auto& n : result->notes)
+    {
+        notes.add (makeObject ({ { "start", n.startSec }, { "end", n.endSec }, { "pitch", n.pitch },
+                                 { "velocity", n.velocity }, { "confidence", n.confidence } }));
+        confidence += n.confidence;
+        lo = std::min (lo, n.pitch);
+        hi = std::max (hi, n.pitch);
+    }
+    printJson (makeObject ({
+        { "file", file.getFullPathName() },
+        { "stem", opt.stem },
+        { "separation", separation },
+        { "monophonic", settings.monophonic },
+        { "params", makeObject ({ { "onset_threshold", settings.notes.onsetThreshold }, { "frame_threshold", settings.notes.frameThreshold },
+                                  { "min_note_ms", settings.notes.minNoteMs } }) },
+        { "bpm", bpm },
+        { "quantize", opt.quantize > 0 ? var (makeObject ({ { "division", opt.quantize }, { "swing", quantized.swing },
+                                                            { "beats", (int) rhythm.beats.size() } })) : var ("off") },
+        { "note_count", (int) result->notes.size() },
+        { "pitch_range", result->notes.empty() ? var() : var (juce::MidiMessage::getMidiNoteName (lo, true, true, 4) + ".."
+                                                               + juce::MidiMessage::getMidiNoteName (hi, true, true, 4)) },
+        { "mean_confidence", result->notes.empty() ? 0.0 : confidence / (double) result->notes.size() },
+        { "transcribe_sec", result->seconds },
+        { "midi_file", opt.out.getFullPathName() },
+        { "notes", notes },
         { "import_ms", importMs },
     }));
     return 0;
@@ -395,6 +573,34 @@ int main (int argc, char** argv)
                 return usage();
         }
         return cmdSeparate (file, out, guide, useCache);
+    }
+
+    if (cmd == "transcribe")
+    {
+        TranscribeOptions opt;
+        for (int i = 3; i < argc; ++i)
+        {
+            const juce::String a (argv[i]);
+            const bool hasValue = i + 1 < argc;
+            if (a == "--no-cache") opt.useCache = false;
+            else if (a == "--mono") opt.monophonic = true;
+            else if (a == "--poly") opt.monophonic = false;
+            else if (a == "--stem" && hasValue) opt.stem = juce::String (argv[++i]).toLowerCase();
+            else if (a == "--out" && hasValue) opt.out = argFile (argv[++i]);
+            else if (a == "--onset" && hasValue) opt.notes.onsetThreshold = juce::String (argv[++i]).getDoubleValue();
+            else if (a == "--frame" && hasValue) opt.notes.frameThreshold = juce::String (argv[++i]).getDoubleValue();
+            else if (a == "--min-ms" && hasValue) opt.notes.minNoteMs = juce::String (argv[++i]).getDoubleValue();
+            else if (a == "--quantize" && hasValue)
+            {
+                const juce::String q (argv[++i]);
+                opt.quantize = q == "off" ? 0 : q.getIntValue();
+                if (opt.quantize != 0 && opt.quantize != 4 && opt.quantize != 8 && opt.quantize != 16 && opt.quantize != 32)
+                    return usage();
+            }
+            else
+                return usage();
+        }
+        return cmdTranscribe (file, opt);
     }
 
     return usage();

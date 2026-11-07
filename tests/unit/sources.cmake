@@ -17,4 +17,6 @@ set(JAUDIOS_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/test_onnx_key.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_sha256.cpp
     # stem-separation
-    ${CMAKE_CURRENT_LIST_DIR}/test_stems.cpp)
+    ${CMAKE_CURRENT_LIST_DIR}/test_stems.cpp
+    # audio-to-midi
+    ${CMAKE_CURRENT_LIST_DIR}/test_transcription.cpp)
