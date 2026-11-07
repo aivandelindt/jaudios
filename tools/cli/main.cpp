@@ -4,6 +4,9 @@
 //   app-cli import  <audio-file>                decode + resample to 44.1 kHz, print capture metadata
 //   app-cli render  <audio-file> [--block N]   play the imported file through the engine graph offline
 //   app-cli analyze <audio-file>                key / tempo / beat grid as JSON
+//   app-cli separate <audio-file> [--out DIR] [--guide other+vocals] [--no-cache]
+//                                               4 stems (HT-Demucs) + guide.wav in DIR, JSON report;
+//                                               stems are cached by audio SHA-256 (StemCache)
 
 #include "app/core/AnalysisService.h"
 #include "app/core/AudioEngine.h"
@@ -11,6 +14,9 @@
 #include "app/core/RealtimeTrap.h"
 #include "engine/analysis/Analysis.h"
 #include "engine/analysis/AudioImport.h"
+#include "engine/analysis/key/KeyDetector.h"
+#include "engine/analysis/stems/StemCache.h"
+#include "engine/analysis/stems/StemSeparator.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_events/juce_events.h>
@@ -43,7 +49,9 @@ int usage()
                  "  app-cli info\n"
                  "  app-cli import  <audio-file>\n"
                  "  app-cli render  <audio-file> [--block N]\n"
-                 "  app-cli analyze <audio-file>\n";
+                 "  app-cli analyze <audio-file>\n"
+                 "  app-cli separate <audio-file> [--out DIR] [--guide other+vocals] [--no-cache]\n"
+                 "                   (default DIR: <file name>.stems/ next to the file; cache: JAUDIOS_STEM_CACHE_DIR)\n";
     return 2;
 }
 
@@ -181,6 +189,147 @@ int cmdAnalyze (const juce::File& file)
     return 0;
 }
 
+void writeWav (const juce::File& dest, const juce::AudioBuffer<float>& b, double sampleRate, bool& ok)
+{
+    dest.deleteFile();
+    std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream> (dest);
+    juce::WavAudioFormat wav;
+    auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions{}
+                                                   .withSampleRate (sampleRate)
+                                                   .withNumChannels (b.getNumChannels())
+                                                   .withBitsPerSample (32)); // float: stems may exceed 0 dBFS
+    if (writer == nullptr || ! writer->writeFromAudioSampleBuffer (b, 0, b.getNumSamples()))
+    {
+        std::cerr << "error: cannot write " << dest.getFullPathName() << "\n";
+        ok = false;
+    }
+}
+
+int cmdSeparate (const juce::File& file, juce::File outDir, const jaudios::analysis::stems::GuideSelection& guide, bool useCache)
+{
+    using namespace jaudios::analysis;
+    double importMs = 0.0;
+    const auto capture = importOrReport (file, importMs);
+    if (! capture)
+        return 1;
+    if (outDir == juce::File())
+        outDir = file.getSiblingFile (file.getFileNameWithoutExtension() + ".stems");
+
+    const auto config = AppConfig::fromEnvironment();
+    const auto model = findModelFile (config, "htdemucs.onnx");
+    if (model == juce::File())
+    {
+        std::cerr << "error: htdemucs.onnx not found (python3 tools/models.py --only demucs --python <env>, or set JAUDIOS_MODELS_DIR)\n";
+        return 1;
+    }
+    const auto cacheDirEnv = juce::SystemStats::getEnvironmentVariable ("JAUDIOS_STEM_CACHE_DIR", {});
+    const stems::StemCache cache (cacheDirEnv.isNotEmpty() ? juce::File (cacheDirEnv) : stems::StemCache::defaultDirectory());
+
+    // Same threading as the app: model load, cache and separation on the AnalysisService worker.
+    jaudios::AnalysisService service;
+    std::optional<stems::StemSeparator::Result> result;
+    juce::String provider, origin, loadError, key;
+    double loadMs = 0.0;
+    bool cacheHit = false;
+    service.submit<stems::StemSeparator::Result> (
+        [&] {
+            const auto t0 = juce::Time::getMillisecondCounterHiRes();
+            stems::StemSeparator sep ({ model, config.onnxCoreML });
+            loadMs = juce::Time::getMillisecondCounterHiRes() - t0;
+            provider = sep.executionProvider();
+            origin = sep.modelOrigin();
+            loadError = sep.loadError();
+            if (! sep.isReady())
+                return stems::StemSeparator::Result { {}, loadError };
+
+            key = stems::StemCache::keyFor (capture->buffer, capture->sampleRate, sep.cacheId());
+            if (useCache)
+                if (auto cached = cache.load (key))
+                {
+                    cacheHit = true;
+                    stems::StemSeparator::Result r;
+                    r.stems = std::move (cached);
+                    return r;
+                }
+
+            auto r = sep.separate (capture->buffer, capture->sampleRate, [] (double p) {
+                std::cerr << "\rseparating " << juce::roundToInt (p * 100.0) << " %" << std::flush;
+            });
+            std::cerr << "\n";
+            if (useCache && r.stems && cache.store (key, *r.stems))
+                cache.prune();
+            return r;
+        },
+        [&] (stems::StemSeparator::Result r) { result = std::move (r); });
+    service.waitUntilIdle();
+
+    if (! result || ! result->stems)
+    {
+        std::cerr << "error: " << (result && result->error.isNotEmpty() ? result->error : loadError) << "\n";
+        return 1;
+    }
+
+    outDir.createDirectory();
+    const auto& st = *result->stems;
+    const int n = st.getNumSamples();
+    auto rmsDb = [] (double sq, int count) { return 20.0 * std::log10 (std::max (std::sqrt (sq / std::max (1, count)), 1e-12)); };
+
+    juce::Array<var> files;
+    bool ok = true;
+    for (auto s : stems::allStems)
+    {
+        const auto& b = st[s];
+        const auto dest = outDir.getChildFile (juce::String (stems::stemName (s)) + ".wav");
+        writeWav (dest, b, st.sampleRate, ok);
+        double sq = 0.0;
+        for (int ch = 0; ch < b.getNumChannels(); ++ch)
+            for (int i = 0; i < n; ++i)
+                sq += (double) b.getSample (ch, i) * b.getSample (ch, i);
+        files.add (makeObject ({ { "stem", stems::stemName (s) }, { "path", dest.getFullPathName() },
+                                 { "rms_dbfs", rmsDb (sq, n * b.getNumChannels()) } }));
+    }
+
+    const auto guideFile = outDir.getChildFile ("guide.wav");
+    if (! guide.empty())
+        writeWav (guideFile, stems::mixGuide (st, guide), st.sampleRate, ok);
+    if (! ok)
+        return 1;
+
+    // skill acceptance: sum of stems vs the original, RMS
+    double residual = 0.0;
+    const auto& mix = capture->buffer;
+    for (int ch = 0; ch < 2; ++ch)
+        for (int i = 0; i < n; ++i)
+        {
+            double sum = 0.0;
+            for (const auto& b : st.buffers)
+                sum += b.getSample (ch, i);
+            const double d = sum - mix.getSample (std::min (ch, mix.getNumChannels() - 1), i);
+            residual += d * d;
+        }
+
+    const double durationSec = n / st.sampleRate;
+    printJson (makeObject ({
+        { "file", file.getFullPathName() },
+        { "duration_sec", durationSec },
+        { "sample_rate", st.sampleRate },
+        { "model", model.getFullPathName() },
+        { "model_origin", origin },
+        { "execution_provider", provider },
+        { "model_load_ms", loadMs },
+        { "cache", useCache ? (cacheHit ? "hit" : "stored") : "off" },
+        { "cache_key", key },
+        { "segments", result->segments },
+        { "separate_sec", result->seconds },
+        { "realtime_factor", durationSec / std::max (1e-6, result->seconds) },
+        { "null_residual_dbfs", rmsDb (residual, 2 * n) },
+        { "stems", files },
+        { "guide", guide.empty() ? var() : makeObject ({ { "stems", guide.toString() }, { "path", guideFile.getFullPathName() } }) },
+        { "import_ms", importMs },
+    }));
+    return 0;
+}
+
 } // namespace
 
 int main (int argc, char** argv)
@@ -219,6 +368,34 @@ int main (int argc, char** argv)
 
     if (cmd == "analyze")
         return cmdAnalyze (file);
+
+    if (cmd == "separate")
+    {
+        juce::File out;
+        jaudios::analysis::stems::GuideSelection guide; // default other + vocals
+        bool useCache = true;
+        for (int i = 3; i < argc; ++i)
+        {
+            const juce::String a (argv[i]);
+            if (a == "--no-cache")
+                useCache = false;
+            else if (a == "--out" && i + 1 < argc)
+                out = argFile (argv[++i]);
+            else if (a == "--guide" && i + 1 < argc)
+            {
+                const auto g = jaudios::analysis::stems::GuideSelection::fromString (argv[++i]);
+                if (! g)
+                {
+                    std::cerr << "error: --guide takes stem names joined by '+' (drums, bass, other, vocals) or 'all'\n";
+                    return 2;
+                }
+                guide = *g;
+            }
+            else
+                return usage();
+        }
+        return cmdSeparate (file, out, guide, useCache);
+    }
 
     return usage();
 }

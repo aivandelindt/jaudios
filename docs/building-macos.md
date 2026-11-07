@@ -48,7 +48,7 @@ Outputs:
 |---|---|
 | App | `build/app/JAudios_artefacts/Release/JAudios.app` |
 | CLI harness | `build/tools/cli/app-cli_artefacts/Release/app-cli` |
-| Tests | `build/tests/jaudios_tests`, `build/tests/jaudios_golden_tests`, `build/tests/jaudios_ml_golden_tests` |
+| Tests | `build/tests/jaudios_tests`, `build/tests/jaudios_golden_tests`, `build/tests/jaudios_ml_golden_tests`, `build/tests/jaudios_stems_tests` |
 
 The ONNX Runtime dylib is copied into `JAudios.app/Contents/Frameworks/` automatically.
 
@@ -118,7 +118,46 @@ provider is off: with ONNX Runtime 1.19.2 it runs only part of this model and re
 (found by the macOS CI golden test). `JAUDIOS_ONNX_COREML=1` turns it on for investigation only.
 Run with `JAUDIOS_LOG_LEVEL=debug` to see the provider and load timings.
 
-## 4. Run
+## 3b. Stem model (HT-Demucs, needed for stem separation)
+
+Stem separation uses HT-Demucs (`htdemucs`, MIT) exported to ONNX on your Mac. The export
+downloads the 80 MB upstream checkpoint once (from `dl.fbaipublicfiles.com`, sha256-checked) and
+writes a 174 MB `build/models/htdemucs.onnx` plus `htdemucs.onnx.provenance.json`. Nothing that
+big is bundled with the app.
+
+Add demucs to the environment from section 3. `--no-deps` matters: demucs' own requirements
+(torchaudio and others) would replace the pinned torch, and the export doesn't need them:
+
+```bash
+~/.venvs/jaudios-ml/bin/pip install pyyaml==6.0.2 && ~/.venvs/jaudios-ml/bin/pip install --no-deps demucs==4.1.0 einops==0.8.1 julius==0.2.7
+```
+
+Export, check parity against upstream PyTorch (max |Δ| < 1e-3), and record provenance (about a minute):
+
+```bash
+python3 tools/models.py --only demucs --python ~/.venvs/jaudios-ml/bin/python
+```
+
+Like the key model, your export won't be byte-identical to the manifest's sha256; the app accepts
+it through its provenance record. Copy both files if you move them
+(`~/Library/Application Support/JAudios/models/` works too).
+
+Separate a file from the command line (stems are 32-bit float WAVs; `guide.wav` sums the guide
+stems, `other+vocals` by default):
+
+```bash
+build/tools/cli/app-cli_artefacts/Release/app-cli separate tests/fixtures/house_124_Amin.wav --out /tmp/house-stems
+```
+
+Separated stems are cached by the SHA-256 of the decoded audio in
+`~/Library/Application Support/JAudios/cache/stems/`, so separating the same audio again is instant.
+About 250 MB per 3-minute track; the least recently used entries are removed above 4 GB. Use
+`--no-cache` to bypass the cache, or `JAUDIOS_STEM_CACHE_DIR` to move it.
+
+Separation runs on ONNX Runtime's CPU provider (default). The CoreML provider stays off until its
+golden test passes on Apple Silicon (`JAUDIOS_ONNX_COREML=1` to try it). The CI's 3-core M1 runner
+prints its 3-minute timing in the "Stem separation of a 3-minute track" step.
+
 
 The app:
 
@@ -192,6 +231,9 @@ Signing and notarizing the sidecar is covered by the packaging-and-release skill
 |---|---|
 | `Library not loaded: @rpath/libonnxruntime.1.19.2.dylib` | Re-configure and rebuild; the dylib is staged under its install name in `build/onnxruntime/lib/` and copied into the app bundle. |
 | Key backend is `chroma` with "model not found" | Export the model (section 3) or set `JAUDIOS_MODELS_DIR`. |
+| `error: htdemucs.onnx not found` | Export the stem model (section 3b) or set `JAUDIOS_MODELS_DIR`. |
+| `ModuleNotFoundError: No module named 'demucs'` (or `einops` / `julius` / `yaml`) | Install the section 3b packages into the ML environment. |
+| "stem model sha256 … not a verified export" | `htdemucs.onnx.provenance.json` is missing or doesn't match the file; re-run the section 3b export. |
 | "key model sha256 mismatch … not a verified local export" | The model has no valid `openkeyscan3.onnx.provenance.json` next to it (copied without it, modified, or left behind by a failed export). Re-run the export in section 3, or copy both files. |
 | "WARNING: onnxsim crashed (SIGSEGV)" during the export | Expected on Apple Silicon; the export continues with the unsimplified graph (see section 3). |
 | The export dies with `SIGSEGV` in another stage | Run `python ml/tests/export_probe.py <raw.onnx> <model.onnx>` with the ML environment's Python to see which library crashes, and report it. |

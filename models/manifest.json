@@ -77,5 +77,43 @@
       }
     },
     "artifacts_note": "url/sha256 stay null until a built zip is published somewhere we control (or an upstream release asset is pinned). `make models` then downloads + verifies; until then it uses the zip produced by the build script."
+  },
+  "htdemucs_pt": {
+    "name": "htdemucs",
+    "demucs_version": "4.1.0",
+    "license": "MIT",
+    "repo": "https://github.com/adefossez/demucs",
+    "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/955717e8-8726e21a.th",
+    "file": "955717e8-8726e21a.th",
+    "size": 84141911,
+    "sha256": "8726e21a993978c7ba086d3872e7608d7d5bfca646ca4aca459ffda844faa8b4",
+    "note": "Single model (bag of 1, weights 1). Fetched by demucs.pretrained.get_model into the torch hub cache."
+  },
+  "htdemucs_onnx": {
+    "phase": "M2",
+    "export": {
+      "script": "ml/export_demucs.py",
+      "from": "htdemucs_pt",
+      "opset": 17,
+      "io": "mix (1,2,343980) + spec (1,4,2048,336) -> spec_out (1,4,4,2048,336) + wave_out (1,4,2,343980)",
+      "pins": {
+        "python": "3.12",
+        "torch": "2.2.2",
+        "onnx": "1.16.2",
+        "onnxruntime": "1.19.2",
+        "numpy": "1.26.4",
+        "demucs": "4.1.0",
+        "einops": "0.8.1",
+        "julius": "0.2.7",
+        "pyyaml": "6.0.2",
+        "soundfile": "0.13.1"
+      },
+      "parity": "upstream forward vs istft(ORT spec_out) + ORT wave_out, max |d| < 1e-3 (measured 4.8e-04 / SNR >= 83 dB on house, pop, techno)"
+    },
+    "file": "htdemucs.onnx",
+    "size": 174266322,
+    "sha256": "6a62f93ce4b6dcee2d0eea47e66341fef9810a2c70645168fe456d4c2f64cdcd",
+    "url": null,
+    "note": "Network core only: STFT/ISTFT, normalisation and segmenting are done in C++ (engine/stems). sha256 identifies the reference export (Linux x86-64 dev machine); like openkeyscan3, other machines produce other bytes and are accepted via htdemucs.onnx.provenance.json. 174 MB: never bundled, exported or downloaded into the models dir."
   }
 }

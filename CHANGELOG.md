@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+### Stem separation (M2)
+- `ml/export_demucs.py`: exports the network core of upstream HT-Demucs (demucs 4.1.0, `htdemucs`, MIT) to ONNX
+  (opset 17, static 7.8 s segment: `mix` (1,2,343980) + `spec` (1,4,2048,336) -> `spec_out` (1,4,4,2048,336) +
+  `wave_out` (1,4,2,343980)). The complex STFT/ISTFT stay outside the graph (ONNX has no complex tensors); the
+  wrapper swaps upstream's four complex helpers and runs upstream `forward()` unchanged, so the architecture is
+  not re-implemented. Traced with grad enabled so `nn.MultiheadAttention` avoids its non-exportable fused path.
+- Parity vs upstream PyTorch forward on house/pop/techno segments: max |d| 4.8e-04 (threshold 1e-3), SNR >= 83 dB.
+  ORT CPU: ~2.3 s per segment on 4 x86-64 vCPUs. Writes `htdemucs.onnx.provenance.json`; `tools/models.py
+  --only demucs [--python ...]` exports / verifies it (same acceptance rule as the key model).
+- `engine/analysis/stems`: `DemucsSpec` ports HTDemucs `_spec`/`_magnitude` and `_mask`/`_ispec` (torch.stft /
+  istft semantics: reflect padding, periodic Hann, normalized, Nyquist bin and 2 edge frames dropped) to C++ on
+  juce::dsp::FFT; vs torch max |d| 5.7e-06 (forward) and 1.4e-06 (inverse). `StemSeparator` reproduces
+  `demucs.api.Separator(shifts=0)`: mono-reference normalisation, `apply_model` segmenting (7.8 s, 25 % overlap,
+  centred padding of the short last chunk with real audio, triangular cross-fade), ORT CPU per segment, progress
+  callback, `cancel()` (stops inside the running inference via RunOptions terminate), mono / non-44.1 kHz input.
+  Stems `{drums, bass, other, vocals}`, input length, sample-aligned. Model accepted by manifest sha256 or verified
+  provenance (`verifyDemucsExport`). `findModelFile()` shares the key model's search path.
+- Golden (`jaudios_stems_tests`, references from upstream PyTorch via `ml/tests/demucs_reference.py`): SNR vs
+  `apply_model` 86.9 dB (16.5 s loop, 3 segments) and 88.9 dB (3 s clip, one padded segment); null test (sum of
+  stems vs mix) -46.7 / -41.1 dBFS RMS, the same as upstream's own output (skill threshold -40 dBFS).
+- `app-cli separate <file> [--out DIR]`: stems as 32-bit float WAVs + JSON report (segments, time, realtime factor,
+  null residual, per-stem RMS). house_124_Amin (62 s): 11 segments in 29 s on 4 x86-64 vCPUs, null -44.1 dBFS.
+- `StemCache`: stems cached in `~/Library/Application Support/JAudios/cache/stems/<sha256>/` (raw float32 + meta),
+  key = SHA-256 of the decoded audio + `StemSeparator::cacheId()` (model sha256 + settings); atomic writes (temp dir
+  + rename), corrupt/truncated entries are misses, LRU `prune()` to 4 GiB. `app-cli separate` uses it
+  (`--no-cache`, `JAUDIOS_STEM_CACHE_DIR`); a second run of the loop is a hit (0 segments).
+- Guide stems: `GuideSelection` (default `other+vocals`, parse/print `bass+vocals`, `all`) and `mixGuide()`;
+  `app-cli separate --guide ...` writes `guide.wav`.
+- Engine: `SourcePlayerProcessor` plays the source and its stems on one transport (10 output channels: source +
+  4 stereo stem layers; stems swapped in through the existing lock-free ownership protocol). Four stem strips
+  (`ChannelId::stemDrums..stemVocals`, `stemChannel()`) with gain / mute / solo into the master; the source is
+  muted while stems are loaded unless soloed. `AudioEngine::setSource()` / `setStems()`; a new source drops its
+  stems. `[rt]` test: zero allocations while playing stems (`tools/rt_check.sh` PASS).
+- macOS CI: exports HT-Demucs on the Mac (parity vs PyTorch), runs the stem goldens, a CoreML golden
+  (`[!mayfail]`) and a 3-minute separation with its timing and null test; docs/building-macos.md section 3b.
+
 ### macOS (Apple Silicon)
 - Fix: on macOS the ONNX Runtime dylib was staged as `libonnxruntime.dylib`, but its install name is
   `@rpath/libonnxruntime.1.19.2.dylib`, so every binary using it would have failed to launch ("Library not

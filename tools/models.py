@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """`make models`: fetch/verify/unpack model artefacts listed in models/manifest.json. Stdlib only.
 
+Models (openkeyscan3.onnx, htdemucs.onnx): accepted by manifest sha256, or as a verified local export
+(provenance record next to the file); exported with --python when missing.
+
 Sidecar (Phase A): for this platform's artifact
   1. if the manifest has url + sha256: download, verify, unpack to build/sidecar/openkeyscan-analyzer
   2. else if build/sidecar/openkeyscan-analyzer-<platform>.zip exists (from the build script): verify
@@ -71,6 +74,57 @@ def verified_local_export(manifest, model, got):
     return True, p.get("platform", "?")
 
 
+def verified_demucs_export(manifest, model, got):
+    """Same rule as StemSeparator: an htdemucs.onnx whose sha256 differs from the manifest is accepted only with a
+    provenance record (ml/export_demucs.py) that matches the file, comes from the pinned demucs version and
+    checkpoint, and records a passing parity check (max |d| < 1e-3)."""
+    prov = model.with_name(model.name + ".provenance.json")
+    if not prov.exists():
+        return False, f"no {prov.name}"
+    try:
+        p = json.loads(prov.read_text())
+    except ValueError:
+        return False, f"{prov.name} is not valid JSON"
+    ckpt = manifest["htdemucs_pt"]
+    if p.get("sha256") != got:
+        return False, "provenance sha256 does not match the file"
+    if p.get("demucs_version") != ckpt["demucs_version"] or p.get("checkpoint_sha256") != ckpt["sha256"]:
+        return False, "exported from a different demucs version or checkpoint"
+    parity, threshold = p.get("parity_max_abs", -1), p.get("parity_threshold", 0)
+    if not (0 <= parity < threshold <= 1e-3):
+        return False, "provenance does not record a passing parity check"
+    return True, p.get("platform", "?")
+
+
+def ensure_demucs(manifest, build_dir, python):
+    """Stem model: verify build/models/htdemucs.onnx, exporting it with `python` if missing or unverified."""
+    entry = manifest["htdemucs_onnx"]
+    dest = build_dir / "models" / entry["file"]
+    for attempt in (0, 1):
+        if dest.exists():
+            got = sha256(dest)
+            if got == entry.get("sha256"):
+                print(f"model ready: {dest}")
+                return 0
+            ok, info = verified_demucs_export(manifest, dest, got)
+            if ok:
+                print(f"model ready: {dest} (verified local export from {info})")
+                return 0
+            if attempt or not python:
+                sys.exit(f"error: {dest} (sha256 {got[:12]}...) is not the manifest's and not a verified export ({info})")
+        if attempt or not python:
+            break
+        fixtures = [str(ROOT / "tests" / "fixtures" / f) for f in
+                    ("house_124_Amin.wav", "pop_100_Cmaj.wav", "techno_132_Fmin.wav")]
+        if not all(Path(f).exists() for f in fixtures):
+            sys.exit("error: the parity check needs fixtures: cmake --build build --target fixtures")
+        subprocess.check_call([python, str(ROOT / "ml" / "export_demucs.py"), "--out", str(dest), *fixtures])
+    print(f"No {entry['file']} yet. Export it (~1 min, downloads the 80 MB upstream checkpoint once) with a\n"
+          f"Python 3.12 env holding models/manifest.json -> htdemucs_onnx.export.pins:\n"
+          f"  python3 tools/models.py --only demucs --python /path/to/venv/bin/python")
+    return 1
+
+
 def ensure_onnx(manifest, build_dir, python):
     """Phase B model: verify build/models/openkeyscan3.onnx, downloading or exporting it if needed."""
     entry = manifest["openkeyscan3_onnx"]
@@ -115,13 +169,17 @@ def main():
     ap.add_argument("--build-dir", default=str(ROOT / "build"))
     ap.add_argument("--build", action="store_true", help="build the sidecar from source if no artefact is available")
     ap.add_argument("--python", help="Python 3.12 env with the export pins: export the ONNX model if missing")
-    ap.add_argument("--only", choices=["sidecar", "onnx"], help="handle just one artefact")
+    ap.add_argument("--only", choices=["sidecar", "onnx", "demucs"], help="handle just one artefact")
     args = ap.parse_args()
 
     manifest = json.loads((ROOT / "models" / "manifest.json").read_text())
+    if args.only == "demucs":
+        return ensure_demucs(manifest, Path(args.build_dir), args.python)
     onnx_status = 0 if args.only == "sidecar" else ensure_onnx(manifest, Path(args.build_dir), args.python)
     if args.only == "onnx":
         return onnx_status
+    if args.only is None:
+        ensure_demucs(manifest, Path(args.build_dir), args.python)
     entry = manifest["openkeyscan_sidecar"]
     plat = platform_id()
     art = entry["artifacts"].get(plat)

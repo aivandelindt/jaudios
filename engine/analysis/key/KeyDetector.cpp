@@ -86,15 +86,17 @@ juce::Array<juce::File> modelSearchLocations()
     return dirs;
 }
 
-static juce::File findModel (const AppConfig& config)
+juce::File findModelFile (const AppConfig& config, const juce::String& fileName)
 {
     if (config.modelsDir != juce::File())
-        return config.modelsDir.getChildFile ("openkeyscan3.onnx");
+        return config.modelsDir.getChildFile (fileName);
     for (const auto& dir : modelSearchLocations())
-        if (dir.getChildFile ("openkeyscan3.onnx").existsAsFile())
-            return dir.getChildFile ("openkeyscan3.onnx");
+        if (dir.getChildFile (fileName).existsAsFile())
+            return dir.getChildFile (fileName);
     return {};
 }
+
+static juce::File findModel (const AppConfig& config) { return findModelFile (config, "openkeyscan3.onnx"); }
 
 KeyDetectorHandle makeKeyDetector (const AppConfig& config)
 {

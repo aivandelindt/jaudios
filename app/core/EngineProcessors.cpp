@@ -6,23 +6,43 @@ namespace jaudios
 {
 
 //==============================================================================
-SourcePlayerProcessor::SourcePlayerProcessor() : EngineProcessorBase (stereoOutOnly())
+SourcePlayerProcessor::SourcePlayerProcessor()
+    : EngineProcessorBase (BusesProperties().withOutput ("Out", juce::AudioChannelSet::discreteChannels (numOutputChannels), true))
 {
-    owned.reserve (8);
+    owned.reserve (16);
 }
 
 bool SourcePlayerProcessor::setSource (std::shared_ptr<const Buffer> buffer)
 {
     collectGarbage();
     const auto* raw = buffer.get();
-
     if (! commands.push ({ Command::Type::setSource, raw, 0 }))
         return false;
+    return keep (std::move (buffer));
+}
 
+bool SourcePlayerProcessor::setStems (std::shared_ptr<const Buffer> buffer)
+{
+    jassert (buffer == nullptr || buffer->getNumChannels() == 2 * numStemLayers);
+    collectGarbage();
+    const auto* raw = buffer.get();
+    if (! commands.push ({ Command::Type::setStems, raw, 0 }))
+        return false;
+    return keep (std::move (buffer));
+}
+
+bool SourcePlayerProcessor::keep (std::shared_ptr<const Buffer> buffer)
+{
     if (buffer != nullptr)
         owned.push_back (std::move (buffer));
-
     return true;
+}
+
+void SourcePlayerProcessor::retire (const Buffer*& slot) noexcept
+{
+    if (slot != nullptr)
+        retired.push (slot); // queue sized so this cannot overflow in practice
+    slot = nullptr;
 }
 
 bool SourcePlayerProcessor::play() { return commands.push ({ Command::Type::play, nullptr, 0 }); }
@@ -48,11 +68,15 @@ void SourcePlayerProcessor::handleCommands() noexcept
         switch (cmd.type)
         {
             case Command::Type::setSource:
-                if (current != nullptr)
-                    retired.push (current); // queue sized so this cannot overflow in practice
+                retire (current);
+                retire (stems);
                 current = cmd.buffer;
                 readPosition = 0;
                 playing = false;
+                break;
+            case Command::Type::setStems:
+                retire (stems);
+                stems = cmd.buffer;
                 break;
             case Command::Type::play:  playing = current != nullptr; break;
             case Command::Type::stop:  playing = false; break;
@@ -74,8 +98,15 @@ void SourcePlayerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         const int n = (int) std::clamp<juce::int64> (length - readPosition, 0, numSamples);
         const int srcChannels = current->getNumChannels();
 
-        for (int ch = 0; ch < buffer.getNumChannels() && n > 0; ++ch)
+        for (int ch = 0; ch < 2 && ch < buffer.getNumChannels() && n > 0; ++ch)
             buffer.copyFrom (ch, 0, *current, std::min (ch, srcChannels - 1), (int) readPosition, n);
+
+        if (stems != nullptr)
+        {
+            const int m = (int) std::clamp<juce::int64> ((juce::int64) stems->getNumSamples() - readPosition, 0, n);
+            for (int ch = 0; ch < 2 * numStemLayers && 2 + ch < buffer.getNumChannels() && m > 0; ++ch)
+                buffer.copyFrom (2 + ch, 0, *stems, ch, (int) readPosition, m);
+        }
 
         readPosition += n;
         if (readPosition >= length)
