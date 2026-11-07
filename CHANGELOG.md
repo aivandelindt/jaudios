@@ -19,6 +19,17 @@
 - Acceptance (skill: note F1 >= 0.80, 50 ms): 0.992 on the new synthetic sung melody fixture `melody_mono_Emin` (60
   notes, vibrato). This is a synthetic stand-in, not a real vocal test set. Fixtures: `FixtureRender` adds
   `melody_mono_Emin` and writes note-level truth (`notes`) for it and for `stem_bass_Dmin`.
+- `quantize()`: snaps note starts / ends to a grid subdividing every beat of the tempo-and-beatgrid beats (default
+  1/16, strength, follows tempo drift, extrapolates outside the grid). Swing preservation: the median delay of off-step
+  notes minus that of on-step notes becomes the swing of the target grid, so latency is not mistaken for swing.
+- `makeMonophonic()` for bass (keeps the higher-energy note where notes overlap, trims or drops the others).
+- `app-cli transcribe <file> [--stem mix|drums|bass|other|vocals|guide] [--mono|--poly] [--quantize ...] [--onset/--frame/--min-ms]
+  [--out FILE.mid]`: JSON notes + a format-1 MIDI file at the detected tempo; stems come from the stem cache or HT-Demucs.
+  The loop's bass stem gives its 32 quarter-note roots (G2..E3).
+- Known: on the drum-less melody fixture the beat grid sits ~20 ms late, so 1/16 quantising moves onsets from a 4.9 ms to a
+  23.3 ms median error vs the truth (F1 unchanged at 0.992). That bias is the beat tracker's (tempo-and-beatgrid).
+- macOS CI: fetches the model, installs the reference pins, runs `jaudios_transcription_tests` and `app-cli transcribe`.
+- Docs: docs/building-macos.md section 3c; restores the "4. Run" heading the M2 edit dropped.
 
 ### Stem separation (M2)
 - `ml/export_demucs.py`: exports the network core of upstream HT-Demucs (demucs 4.1.0, `htdemucs`, MIT) to ONNX

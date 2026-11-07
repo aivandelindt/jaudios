@@ -24,6 +24,7 @@
 | basic-pitch (Python) | 0.4.0 (`--no-deps`, no TensorFlow) | Apache-2.0 | upstream reference for the AudioToMidi goldens (`ml/tests/basic_pitch_reference.py`; approved 2026-11-07) |
 | mir_eval / pretty_midi / mido / resampy | 0.8.2 / 0.2.11.post0 / 1.3.3 / 0.4.2 | MIT / MIT / MIT / ISC | import-time dependencies of basic-pitch's inference + note creation (approved 2026-11-07) |
 | setuptools | 75.8.0 | MIT | provides `pkg_resources`, which resampy 0.4.2 imports |
+| decorator / six / importlib_resources | 5.3.1 / 1.17.0 / 7.1.0 | BSD-2 / MIT / Apache-2.0 | requirements of mir_eval and pretty_midi (pinned so the `--no-deps` install is complete) |
 
 ### Ported code
 | Component | Version | License | Used for |

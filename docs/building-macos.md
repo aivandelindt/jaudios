@@ -48,7 +48,7 @@ Outputs:
 |---|---|
 | App | `build/app/JAudios_artefacts/Release/JAudios.app` |
 | CLI harness | `build/tools/cli/app-cli_artefacts/Release/app-cli` |
-| Tests | `build/tests/jaudios_tests`, `build/tests/jaudios_golden_tests`, `build/tests/jaudios_ml_golden_tests`, `build/tests/jaudios_stems_tests` |
+| Tests | `build/tests/jaudios_tests`, `build/tests/jaudios_golden_tests`, `build/tests/jaudios_ml_golden_tests`, `build/tests/jaudios_stems_tests`, `build/tests/jaudios_transcription_tests` |
 
 The ONNX Runtime dylib is copied into `JAudios.app/Contents/Frameworks/` automatically.
 
@@ -159,6 +159,40 @@ golden test passes on Apple Silicon (`JAUDIOS_ONNX_COREML=1` to try it). The CI'
 prints its 3-minute timing in the "Stem separation of a 3-minute track" step.
 
 
+## 3c. Audio-to-MIDI model (Basic Pitch)
+
+Basic Pitch (Spotify, Apache-2.0) ships its own ONNX model inside its PyPI package. The app uses
+that 230 KB file unchanged. Fetching it needs only the system Python (no ML environment): it
+downloads the pinned basic-pitch 0.4.0 wheel and checks the sha256 of both the wheel and the model.
+
+```bash
+python3 tools/models.py --only basic_pitch
+```
+
+Transcribe the mix, or a separated stem (separation needs the section 3b model and uses the stem
+cache). The result is printed as JSON (notes with a confidence each) and written as a MIDI file:
+
+```bash
+build/tools/cli/app-cli_artefacts/Release/app-cli transcribe tests/fixtures/melody_mono_Emin.wav --out /tmp/melody.mid
+```
+
+```bash
+build/tools/cli/app-cli_artefacts/Release/app-cli transcribe tests/fixtures/house_124_Amin.wav --stem bass
+```
+
+Options: `--stem mix|drums|bass|other|vocals|guide` (guide = other + vocals), `--mono` / `--poly`
+(the bass stem defaults to monophonic), `--quantize 4|8|16|32|off` (default 16, on the detected
+beat grid, swing kept), and the note thresholds `--onset 0.5 --frame 0.5 --min-ms 58`.
+
+The golden tests that compare against upstream's Python code need its reference packages in the
+ML environment. `--no-deps` keeps TensorFlow out; Basic Pitch runs its ONNX model on onnxruntime:
+
+```bash
+~/.venvs/jaudios-ml/bin/pip install --no-deps basic-pitch==0.4.0 mir_eval==0.8.2 pretty_midi==0.2.11.post0 mido==1.3.3 resampy==0.4.2 setuptools==75.8.0 decorator==5.3.1 six==1.17.0 importlib_resources==7.1.0
+```
+
+## 4. Run
+
 The app:
 
 ```bash
@@ -232,6 +266,7 @@ Signing and notarizing the sidecar is covered by the packaging-and-release skill
 | `Library not loaded: @rpath/libonnxruntime.1.19.2.dylib` | Re-configure and rebuild; the dylib is staged under its install name in `build/onnxruntime/lib/` and copied into the app bundle. |
 | Key backend is `chroma` with "model not found" | Export the model (section 3) or set `JAUDIOS_MODELS_DIR`. |
 | `error: htdemucs.onnx not found` | Export the stem model (section 3b) or set `JAUDIOS_MODELS_DIR`. |
+| `error: basic_pitch.onnx not found` or "audio-to-MIDI model sha256 mismatch" | `python3 tools/models.py --only basic_pitch` (section 3c). |
 | `ModuleNotFoundError: No module named 'demucs'` (or `einops` / `julius` / `yaml`) | Install the section 3b packages into the ML environment. |
 | "stem model sha256 … not a verified export" | `htdemucs.onnx.provenance.json` is missing or doesn't match the file; re-run the section 3b export. |
 | "key model sha256 mismatch … not a verified local export" | The model has no valid `openkeyscan3.onnx.provenance.json` next to it (copied without it, modified, or left behind by a failed export). Re-run the export in section 3, or copy both files. |

@@ -103,6 +103,9 @@ jobs:
           # which would replace the pinned torch
           DEMUCS=$(python3 -c "import json; p=json.load(open('models/manifest.json'))['htdemucs_onnx']['export']['pins']; print(' '.join(f'{k}=={p[k]}' for k in ('demucs','einops','julius','pyyaml')))")
           "$ML_VENV/bin/pip" install -q --no-deps $DEMUCS
+          # basic-pitch's reference pipeline (no TensorFlow: it runs upstream's nmp.onnx on onnxruntime)
+          BP=$(python3 -c "import json; p=json.load(open('models/manifest.json'))['basic_pitch_onnx']['reference_pins']; print(' '.join(f'{k}=={v}' for k,v in p.items()))")
+          "$ML_VENV/bin/pip" install -q --no-deps $BP
 
       - name: Configure (Release)
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DJAUDIOS_ML_PYTHON="$ML_VENV/bin/python"
@@ -121,6 +124,9 @@ jobs:
 
       - name: Verify model (manifest sha256 or verified provenance)
         run: python3 tools/models.py --only onnx
+
+      - name: Audio-to-MIDI model (upstream Basic Pitch nmp.onnx, sha256-pinned)
+        run: python3 tools/models.py --only basic_pitch
 
       - name: Stem model (export HT-Demucs on macOS + parity vs PyTorch)
         env:
@@ -160,6 +166,13 @@ jobs:
               print(f"::warning::3-minute separation took {d['separate_sec']:.0f} s (target < 60 s on an M-series Mac; GitHub's runner is a 3-core M1 VM)")
           sys.exit(0 if d['null_residual_dbfs'] < -40 else 1)
           PY
+
+      - name: Audio to MIDI on the fixtures (mix, and the bass stem from the stem cache)
+        run: |
+          CLI=build/tools/cli/app-cli_artefacts/Release/app-cli
+          "$CLI" transcribe tests/fixtures/melody_mono_Emin.wav --out "$RUNNER_TEMP/melody.mid" | python3 -c "import json,sys; d=json.load(sys.stdin); print({k: d[k] for k in ('note_count','pitch_range','mean_confidence','quantize','transcribe_sec')})"
+          "$CLI" transcribe tests/fixtures/loop_8bar_Gmaj.wav --stem bass --out "$RUNNER_TEMP/loop.bass.mid" | python3 -c "import json,sys; d=json.load(sys.stdin); print({k: d[k] for k in ('separation','monophonic','note_count','pitch_range','transcribe_sec')})"
+          ls -la "$RUNNER_TEMP"/*.mid
 
       - name: Stem separation with the CoreML execution provider (diagnostic)
         continue-on-error: true

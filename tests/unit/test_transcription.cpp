@@ -169,3 +169,69 @@ TEST_CASE ("AudioToMidi without a model reports why", "[transcription]")
     b.clear();
     CHECK_FALSE (a2m.transcribe (b, 22050.0).ok());
 }
+
+//==============================================================================
+#include "engine/analysis/transcription/Quantize.h"
+
+namespace
+{
+Note at (double start, double end, int pitch = 60)
+{
+    Note n;
+    n.startSec = start;
+    n.endSec = end;
+    n.pitch = pitch;
+    n.confidence = 0.8f;
+    return n;
+}
+std::vector<double> beatGrid (double bpm, int count, double offset = 0.0)
+{
+    std::vector<double> b;
+    for (int i = 0; i < count; ++i)
+        b.push_back (offset + i * 60.0 / bpm);
+    return b;
+}
+} // namespace
+
+TEST_CASE ("Quantize snaps starts and ends to a 1/16 grid on the beat grid", "[transcription][quantize]")
+{
+    const auto beats = beatGrid (120.0, 16, 0.1); // 16th = 0.125 s
+    const auto r = quantize ({ at (0.1 + 0.13, 0.1 + 0.36), at (0.1 + 0.49, 0.1 + 0.52) }, beats);
+    REQUIRE (r.notes.size() == 2);
+    CHECK (r.swing == 0.0);
+    CHECK_THAT (r.notes[0].startSec, WithinAbs (0.1 + 0.125, 1e-9));
+    CHECK_THAT (r.notes[0].endSec, WithinAbs (0.1 + 0.375, 1e-9));
+    CHECK_THAT (r.notes[1].startSec, WithinAbs (0.1 + 0.5, 1e-9));
+    CHECK_THAT (r.notes[1].endSec, WithinAbs (0.1 + 0.625, 1e-9)); // at least one step long
+}
+
+TEST_CASE ("Quantize follows tempo drift and extrapolates outside the grid", "[transcription][quantize]")
+{
+    const std::vector<double> beats { 1.0, 1.5, 2.1 }; // 0.5 s then 0.6 s beats
+    const auto r = quantize ({ at (1.66, 1.8), at (0.62, 0.7), at (2.42, 2.6) }, beats);
+    CHECK_THAT (r.notes[0].startSec, WithinAbs (0.625, 1e-9));        // before the grid: 0.125 s steps
+    CHECK_THAT (r.notes[1].startSec, WithinAbs (1.5 + 0.15, 1e-9));   // inside the 0.6 s beat: 0.15 s steps
+    CHECK_THAT (r.notes[2].startSec, WithinAbs (2.1 + 0.3, 1e-9));    // after it: last interval continued
+}
+
+TEST_CASE ("Quantize preserves swing (and strength 0 leaves notes alone)", "[transcription][quantize]")
+{
+    const auto beats = beatGrid (100.0, 32); // step = 0.15 s
+    const double step = 0.15;
+    std::vector<Note> notes;
+    for (int k = 0; k < 16; ++k) // swung 16ths: offbeats a third of a step late
+        notes.push_back (at (k * step + (k % 2 ? step / 3.0 : 0.0) + 0.004, k * step + 0.1));
+
+    const auto swung = quantize (notes, beats);
+    CHECK_THAT (swung.swing, WithinAbs (1.0 / 3.0, 0.02));
+    CHECK_THAT (swung.notes[1].startSec, WithinAbs (step * (1.0 + swung.swing), 1e-9));
+    CHECK_THAT (swung.notes[2].startSec, WithinAbs (2 * step, 1e-9));
+
+    QuantizeSettings straight;
+    straight.preserveSwing = false;
+    CHECK_THAT (quantize (notes, beats, straight).notes[1].startSec, WithinAbs (step, 1e-9));
+
+    QuantizeSettings none;
+    none.strength = 0.0;
+    CHECK (quantize (notes, beats, none).notes[3].startSec == notes[3].startSec);
+}
