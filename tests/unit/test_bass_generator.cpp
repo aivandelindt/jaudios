@@ -36,7 +36,7 @@ BassInput input (Key key, const std::vector<Chord>& chords, int repeats = 2)
 const Key C { 0, Mode::major }, Am { 9, Mode::minor }, Fm { 5, Mode::minor };
 const std::vector<Chord> pop { { 0, Quality::maj }, { 7, Quality::maj }, { 9, Quality::min }, { 5, Quality::maj } };
 const std::vector<Chord> borrowed { { 0, Quality::maj }, { 10, Quality::maj }, { 5, Quality::maj }, { 0, Quality::maj } }; // I bVII IV I
-const std::vector<Chord> minor { { 9, Quality::min }, { 5, Quality::maj }, { 0, Quality::maj }, { 7, Quality::maj } };
+const std::vector<Chord> aMinorProg { { 9, Quality::min }, { 5, Quality::maj }, { 0, Quality::maj }, { 7, Quality::maj } };
 const std::vector<Chord> techno { { 5, Quality::min }, { 5, Quality::min }, { 10, Quality::min }, { 5, Quality::min } };
 
 const Chord& chordAt (const BassInput& in, double t)
@@ -90,7 +90,7 @@ TEST_CASE ("Invalid patterns are rejected with a reason", "[bass][patterns]")
 TEST_CASE ("Skill acceptance: every bass note is a chord tone or a scale tone", "[bass][acceptance]")
 {
     struct Case { Key key; const std::vector<Chord>* chords; const char* name; };
-    for (const auto& c : { Case { C, &pop, "C pop" }, Case { C, &borrowed, "C I-bVII-IV-I" }, Case { Am, &minor, "Am i-VI-III-VII" },
+    for (const auto& c : { Case { C, &pop, "C pop" }, Case { C, &borrowed, "C I-bVII-IV-I" }, Case { Am, &aMinorProg, "Am i-VI-III-VII" },
                            Case { Fm, &techno, "Fm techno" } })
         for (const auto& pattern : builtinBassPatterns())
         {
@@ -197,7 +197,7 @@ TEST_CASE ("Low vocal notes push a clashing bass note out of the way", "[bass]")
 
 TEST_CASE ("Bass generation is deterministic", "[bass]")
 {
-    const auto in = input (Am, minor, 2);
+    const auto in = input (Am, aMinorProg, 2);
     for (const auto& pattern : builtinBassPatterns())
     {
         const auto a = generateBass (in, pattern), b = generateBass (in, pattern);

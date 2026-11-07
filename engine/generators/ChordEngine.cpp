@@ -121,13 +121,13 @@ std::vector<Slot> makeSlots (const std::vector<BarEvidence>& bars, HarmonicRhyth
 
 std::vector<Chord> vocabulary (Key key, Style, bool sevenths)
 {
-    const bool major = key.mode == Mode::major;
-    std::vector<std::string> romans = major
+    const bool isMajor = key.mode == Mode::major;
+    std::vector<std::string> romans = isMajor
         ? std::vector<std::string> { "I", "ii", "iii", "IV", "V", "vi", "vii°", "bVI", "bVII", "iv", "bIII", "Isus2", "Isus4", "Vsus4" }
         : std::vector<std::string> { "i", "ii°", "III", "iv", "v", "VI", "VII", "V", "IV", "bII", "Isus2" };
     if (sevenths)
     {
-        const auto more = major ? std::vector<std::string> { "Imaj7", "ii7", "iii7", "IVmaj7", "V7", "vi7", "Iadd9" }
+        const auto more = isMajor ? std::vector<std::string> { "Imaj7", "ii7", "iii7", "IVmaj7", "V7", "vi7", "Iadd9" }
                                 : std::vector<std::string> { "i7", "iv7", "v7", "VImaj7", "IIImaj7", "VII7", "V7" };
         romans.insert (romans.end(), more.begin(), more.end());
     }
