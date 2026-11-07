@@ -7,9 +7,11 @@ set(JAUDIOS_TEST_ENV "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan
 add_library(test_support INTERFACE)
 target_include_directories(test_support INTERFACE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR})
 set(JAUDIOS_CQT_REFERENCE_DIR "${PROJECT_BINARY_DIR}/goldens/cqt")
+set(JAUDIOS_DEMUCS_REFERENCE_DIR "${PROJECT_BINARY_DIR}/goldens/demucs")
 target_compile_definitions(test_support INTERFACE
     JAUDIOS_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
     JAUDIOS_CQT_REFERENCE_DIR="${JAUDIOS_CQT_REFERENCE_DIR}"
+    JAUDIOS_DEMUCS_REFERENCE_DIR="${JAUDIOS_DEMUCS_REFERENCE_DIR}"
     JAUDIOS_DEV_MODELS_DIR="${PROJECT_BINARY_DIR}/models")
 
 # Python reference for the CQT / ONNX golden tests (ml/tests/cqt_reference.py). Optional: point it
@@ -49,7 +51,20 @@ target_link_libraries(jaudios_ml_golden_tests PRIVATE Catch2::Catch2 app_core te
 catch_discover_tests(jaudios_ml_golden_tests DISCOVERY_MODE PRE_TEST
                      PROPERTIES FIXTURES_REQUIRED cqt_reference ENVIRONMENT "${JAUDIOS_TEST_ENV}")
 
+# StemSeparator vs upstream demucs (needs build/models/htdemucs.onnx; references need JAUDIOS_ML_PYTHON).
+add_executable(jaudios_stems_tests TestMain.cpp golden/test_stems_golden.cpp)
+target_link_libraries(jaudios_stems_tests PRIVATE Catch2::Catch2 app_core test_support jaudios_warnings)
+catch_discover_tests(jaudios_stems_tests DISCOVERY_MODE PRE_TEST
+                     PROPERTIES FIXTURES_REQUIRED "golden_audio;demucs_reference" ENVIRONMENT "${JAUDIOS_TEST_ENV}")
+if(JAUDIOS_WITH_ONNXRUNTIME)
+    jaudios_copy_onnxruntime(jaudios_stems_tests)
+endif()
+
 if(JAUDIOS_ML_PYTHON)
+    add_test(NAME demucs_reference
+             COMMAND ${JAUDIOS_ML_PYTHON} ${PROJECT_SOURCE_DIR}/ml/tests/demucs_reference.py ${JAUDIOS_DEMUCS_REFERENCE_DIR})
+    set_tests_properties(demucs_reference PROPERTIES FIXTURES_SETUP demucs_reference FIXTURES_REQUIRED golden_audio)
+
     set(_fixture_wavs)
     foreach(name house_124_Amin techno_132_Fmin pop_100_Cmaj loop_8bar_Gmaj stem_bass_Dmin)
         list(APPEND _fixture_wavs ${PROJECT_SOURCE_DIR}/tests/fixtures/${name}.wav)

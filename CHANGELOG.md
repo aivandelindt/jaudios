@@ -11,6 +11,19 @@
 - Parity vs upstream PyTorch forward on house/pop/techno segments: max |d| 4.8e-04 (threshold 1e-3), SNR >= 83 dB.
   ORT CPU: ~2.3 s per segment on 4 x86-64 vCPUs. Writes `htdemucs.onnx.provenance.json`; `tools/models.py
   --only demucs [--python ...]` exports / verifies it (same acceptance rule as the key model).
+- `engine/analysis/stems`: `DemucsSpec` ports HTDemucs `_spec`/`_magnitude` and `_mask`/`_ispec` (torch.stft /
+  istft semantics: reflect padding, periodic Hann, normalized, Nyquist bin and 2 edge frames dropped) to C++ on
+  juce::dsp::FFT; vs torch max |d| 5.7e-06 (forward) and 1.4e-06 (inverse). `StemSeparator` reproduces
+  `demucs.api.Separator(shifts=0)`: mono-reference normalisation, `apply_model` segmenting (7.8 s, 25 % overlap,
+  centred padding of the short last chunk with real audio, triangular cross-fade), ORT CPU per segment, progress
+  callback, `cancel()` (stops inside the running inference via RunOptions terminate), mono / non-44.1 kHz input.
+  Stems `{drums, bass, other, vocals}`, input length, sample-aligned. Model accepted by manifest sha256 or verified
+  provenance (`verifyDemucsExport`). `findModelFile()` shares the key model's search path.
+- Golden (`jaudios_stems_tests`, references from upstream PyTorch via `ml/tests/demucs_reference.py`): SNR vs
+  `apply_model` 86.9 dB (16.5 s loop, 3 segments) and 88.9 dB (3 s clip, one padded segment); null test (sum of
+  stems vs mix) -46.7 / -41.1 dBFS RMS, the same as upstream's own output (skill threshold -40 dBFS).
+- `app-cli separate <file> [--out DIR]`: stems as 32-bit float WAVs + JSON report (segments, time, realtime factor,
+  null residual, per-stem RMS). house_124_Amin (62 s): 11 segments in 29 s on 4 x86-64 vCPUs, null -44.1 dBFS.
 
 ### macOS (Apple Silicon)
 - Fix: on macOS the ONNX Runtime dylib was staged as `libonnxruntime.dylib`, but its install name is

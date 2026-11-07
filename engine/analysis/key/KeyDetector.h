@@ -95,4 +95,8 @@ juce::Array<juce::File> sidecarSearchLocations();
     the app bundle's Resources/models, then the dev build's build/models (`make models`). */
 juce::Array<juce::File> modelSearchLocations();
 
+/** `fileName` in config.modelsDir if set, else in the first modelSearchLocations() dir holding it;
+    empty File if none does. Shared by the key model and the stem model (htdemucs.onnx). */
+juce::File findModelFile (const AppConfig&, const juce::String& fileName);
+
 } // namespace jaudios::analysis

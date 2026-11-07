@@ -34,6 +34,14 @@ target_compile_definitions(engine_analysis PRIVATE
     JAUDIOS_OPENKEYSCAN_ONNX_SHA256="${_onnx_sha}"
     JAUDIOS_OPENKEYSCAN_SOURCE_COMMIT="${_source_commit}"
     JAUDIOS_OPENKEYSCAN_CHECKPOINT_SHA256="${_ckpt_sha}")
+# stem-separation: htdemucs.onnx sha256 + the pins a local export's provenance must match.
+string(JSON _demucs_sha GET "${_manifest}" htdemucs_onnx sha256)
+string(JSON _demucs_ckpt GET "${_manifest}" htdemucs_pt sha256)
+string(JSON _demucs_version GET "${_manifest}" htdemucs_pt demucs_version)
+target_compile_definitions(engine_analysis PRIVATE
+    JAUDIOS_HTDEMUCS_ONNX_SHA256="${_demucs_sha}"
+    JAUDIOS_HTDEMUCS_CHECKPOINT_SHA256="${_demucs_ckpt}"
+    JAUDIOS_DEMUCS_VERSION="${_demucs_version}")
 if(JAUDIOS_WITH_ONNXRUNTIME)
     target_link_libraries(engine_analysis PRIVATE onnxruntime::onnxruntime)
     target_compile_definitions(engine_analysis PRIVATE JAUDIOS_HAS_ONNXRUNTIME=1)

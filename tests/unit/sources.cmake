@@ -15,4 +15,6 @@ set(JAUDIOS_TEST_SOURCES
     # key-detection-openkeyscan Phase B (ONNX)
     ${CMAKE_CURRENT_LIST_DIR}/test_cqt.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_onnx_key.cpp
-    ${CMAKE_CURRENT_LIST_DIR}/test_sha256.cpp)
+    ${CMAKE_CURRENT_LIST_DIR}/test_sha256.cpp
+    # stem-separation
+    ${CMAKE_CURRENT_LIST_DIR}/test_stems.cpp)
