@@ -224,3 +224,55 @@ TEST_CASE ("Kick detection on the drums stem (HT-Demucs) of the pop fixture", "[
     CHECK (recall >= 0.9);
     CHECK (precision >= 0.9);
 }
+
+//==============================================================================
+// drum-generator acceptance: kicks align to the detected downbeats within 5 ms, in the MIDI and in
+// the rendered audio (no model needed: beat grid + generator + synthesised kit).
+#include "engine/analysis/tempo/BeatTracker.h"
+#include "engine/generators/DrumGenerator.h"
+#include "engine/synth/DrumSampler.h"
+
+TEST_CASE ("Skill acceptance: drum kicks align to the detected downbeats within 5 ms (MIDI + audio)", "[drums][golden][acceptance]")
+{
+    const juce::String name = GENERATE (as<juce::String>{}, "house_124_Amin", "techno_132_Fmin", "pop_100_Cmaj", "loop_8bar_Gmaj");
+    const auto mono = monoOf (name);
+    const auto rhythm = analysis::analyzeRhythm (mono.data(), (int) mono.size(), 44100.0);
+    REQUIRE (rhythm.bars.size() >= 4);
+    std::vector<std::pair<double, double>> bars;
+    for (const auto& b : rhythm.bars)
+        bars.push_back ({ b.startSec, b.endSec });
+
+    for (const auto& pattern : gen::builtinDrumPatterns())
+    {
+        gen::DrumSettings s; // transitions on: fills and drops must not move the remaining kicks
+        s.transition = gen::DrumVariant::riserHit;
+        const auto notes = gen::generateDrums (bars, pattern, s);
+        const auto audio = synth::renderDrums (notes, synth::DrumKit::synthesised (44100.0), 44100.0,
+                                               (int) ((bars.back().second + 1.0) * 44100.0), gen::DrumElement::kick);
+        INFO (name << " / " << pattern.name);
+        int checked = 0;
+        for (const auto& n : notes)
+        {
+            if (n.element != gen::DrumElement::kick || n.step != 0)
+                continue;
+            const double downbeat = bars[(size_t) n.bar].first;
+            CHECK (std::abs (n.startSec - downbeat) < 0.005); // MIDI
+            // audio: the kick's attack is the biggest jump in |x| within +-10 ms of the downbeat
+            const int centre = (int) std::lround (downbeat * 44100.0), w = 441;
+            int best = centre;
+            float bestJump = -1.0f;
+            for (int i = std::max (1, centre - w); i < std::min (audio.getNumSamples(), centre + w); ++i)
+            {
+                const float jump = std::abs (audio.getSample (0, i)) - std::abs (audio.getSample (0, i - 1));
+                if (jump > bestJump)
+                {
+                    bestJump = jump;
+                    best = i;
+                }
+            }
+            CHECK (std::abs (best / 44100.0 - downbeat) < 0.005);
+            ++checked;
+        }
+        CHECK (checked > 0);
+    }
+}

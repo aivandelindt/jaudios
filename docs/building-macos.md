@@ -222,6 +222,25 @@ ones must pass `python3 tools/validate_patterns.py`. Options: `--style`, `--grid
 With `--stems` they come from the drums stem, which is more accurate when the bass plays between
 the kicks; the vocal stem's low notes are then kept clear too.
 
+## 3f. Drums
+
+A groove on the source's detected downbeats, rendered with JAudios' built-in kit. The kit is
+synthesised by our own code, so no sample files are needed or shipped:
+
+```bash
+build/tools/cli/app-cli_artefacts/Release/app-cli drums tests/fixtures/house_124_Amin.wav --style house --split --out /tmp/house-drums
+```
+
+This writes `drums.wav` + `drums.mid` (General MIDI, channel 10) and, with `--split`, one WAV + MIDI
+per element (kick, snare, clap, hat, openhat, perc, ride). Options: `--pattern NAME`
+(`--list-patterns`), `--intensity 1..5` (1 = kick + snare/clap, 2 adds hats, 3 open hats and ghost
+notes, 4 perc, 5 ride), `--no-kick` (when you have your own kick), `--transition
+fill|riser_hit|drop|half_time|none` on the last bar of every `--phrase` bars (default 8), `--swing`.
+To use your own samples, put files named `<element>[_v<layer>][_rr<n>].wav` (e.g. `kick.wav`,
+`snare_v2_rr3.wav`) in a folder and pass `--kit FOLDER`. Elements without files keep the built-in
+sound. Groove files live in `engine/generators/drums/*.json` and must pass
+`python3 tools/validate_patterns.py`.
+
 ## 4. Run
 
 The app:

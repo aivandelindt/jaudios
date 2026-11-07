@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Validate engine/generators/patterns/*.json against patterns/schema.json (bass-generator skill:
-"Pattern JSON validated against schema in CI"). Stdlib only.
+"""Validate generator pattern JSON against the schema.json in its folder (bass-generator skill:
+"Pattern JSON validated against schema in CI"; drum-generator patterns use the same check). Stdlib only.
 
-    python3 tools/validate_patterns.py [PATTERN_DIR]
+    python3 tools/validate_patterns.py [PATTERN_DIR ...]   (default: engine/generators/patterns and .../drums)
 
-Implements the JSON Schema keywords schema.json uses (type, required, properties,
-additionalProperties, enum, minimum, maximum, minItems, items, pattern), then the rules a schema
-cannot express: every step and its length inside the loop (grid * bars), no overlapping notes (a
-bass line is monophonic), unique names. Exits 1 on the first file with errors, after listing all.
+Implements the JSON Schema keywords the schemas use (type, required, properties,
+additionalProperties, enum, minimum, maximum, minItems, items, pattern, $ref to #/$defs), then the
+rules a schema cannot express. Bass: every step and its length inside the loop (grid * bars), no
+overlapping notes (a bass line is monophonic). Drums: every main lane spans bars * 16 steps, every
+variant lane one bar (or is empty), at least one hit. Both: unique names, file name == name.
+Exits 1 if any file has errors, after listing all.
 """
 import json
 import re
@@ -18,7 +20,12 @@ ROOT = Path(__file__).resolve().parent.parent
 TYPES = {"object": dict, "array": list, "string": str, "number": (int, float), "integer": int}
 
 
-def validate(value, schema, path, errors):
+def validate(value, schema, path, errors, root=None):
+    root = root or schema
+    if "$ref" in schema:
+        ref = schema["$ref"]
+        assert ref.startswith("#/$defs/"), ref
+        return validate(value, root["$defs"][ref[len("#/$defs/"):]], path, errors, root)
     t = schema.get("type")
     if t:
         ok = isinstance(value, TYPES[t]) and not (t in ("number", "integer") and isinstance(value, bool))
@@ -40,14 +47,29 @@ def validate(value, schema, path, errors):
                 errors.append(f"{path}: missing required '{key}'")
         for key, v in value.items():
             if key in props:
-                validate(v, props[key], f"{path}.{key}", errors)
+                validate(v, props[key], f"{path}.{key}", errors, root)
             elif schema.get("additionalProperties") is False:
                 errors.append(f"{path}: unexpected property '{key}'")
     if t == "array":
         if len(value) < schema.get("minItems", 0):
             errors.append(f"{path}: fewer than {schema['minItems']} items")
         for i, item in enumerate(value):
-            validate(item, schema.get("items", {}), f"{path}[{i}]", errors)
+            validate(item, schema.get("items", {}), f"{path}[{i}]", errors, root)
+
+
+def semantic_drums(p, errors):
+    if errors:
+        return
+    total = 16 * p["bars"]
+    for lane, steps in p["lanes"].items():
+        if len(steps) != total:
+            errors.append(f"lanes.{lane}: {len(steps)} steps, expected {total} (bars * 16)")
+    if not any(c != "." for steps in p["lanes"].values() for c in steps):
+        errors.append("lanes: no hits")
+    for variant in ("fill", "riser_hit", "drop", "half_time"):
+        for lane, steps in p.get(variant, {}).items():
+            if len(steps) not in (0, 16):
+                errors.append(f"{variant}.{lane}: {len(steps)} steps, expected one bar (16) or empty")
 
 
 def semantic(p, errors):
@@ -67,12 +89,22 @@ def semantic(p, errors):
 
 
 def main():
-    folder = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "engine" / "generators" / "patterns"
+    folders = [Path(a) for a in sys.argv[1:]] or [ROOT / "engine" / "generators" / "patterns",
+                                                ROOT / "engine" / "generators" / "drums"]
+    failed = False
+    for folder in folders:
+        failed = check_folder(folder) or failed
+    sys.exit(1 if failed else 0)
+
+
+def check_folder(folder):
     schema = json.loads((folder / "schema.json").read_text())
+    rules = semantic_drums if "drum" in schema.get("$id", "") else semantic
     names, failed = set(), False
     files = sorted(f for f in folder.glob("*.json") if f.name != "schema.json")
     if not files:
         sys.exit(f"no patterns in {folder}")
+    print(f"{folder.relative_to(ROOT) if folder.is_relative_to(ROOT) else folder} ({schema.get('$id')})")
     for f in files:
         errors = []
         try:
@@ -82,7 +114,7 @@ def main():
             p = None
         if p is not None:
             validate(p, schema, "$", errors)
-            semantic(p, errors)
+            rules(p, errors)
             if not errors:
                 if p["name"] in names:
                     errors.append(f"duplicate name {p['name']}")
@@ -90,9 +122,9 @@ def main():
                     errors.append(f"file name {f.stem} != pattern name {p['name']}")
                 names.add(p["name"])
         status = "ok" if not errors else "FAIL"
-        print(f"{status:4s} {f.name}" + ("" if not errors else "\n     " + "\n     ".join(errors)))
+        print(f"  {status:4s} {f.name}" + ("" if not errors else "\n       " + "\n       ".join(errors)))
         failed = failed or bool(errors)
-    sys.exit(1 if failed else 0)
+    return failed
 
 
 if __name__ == "__main__":

@@ -1,0 +1,33 @@
+{
+  "name": "lofi_lazy",
+  "style": "lofi",
+  "description": "Lo-fi boom-bap: lazy kick, snare on 2 and 4 with ghost notes, swung 8th hats",
+  "bars": 2,
+  "swing": 0.3,
+  "lanes": {
+    "kick": "X......x..x.....X.........x..x..",
+    "snare": "....X..g....X..g....X..g....X.g.",
+    "hat": "x.o.x.o.x.o.x.o.x.o.x.o.x.o.x.o.",
+    "openhat": "..............................o.",
+    "perc": "......o...............o.........",
+    "ride": "o...o...o...o...o...o...o...o..."
+  },
+  "fill": {
+    "kick": "X......x..x.....",
+    "snare": "....X..g..g.XgXg"
+  },
+  "riser_hit": {
+    "kick": "X...............",
+    "snare": "o.o.o.o.x.x.xxXX",
+    "hat": ""
+  },
+  "drop": {
+    "kick": "",
+    "snare": "............x..."
+  },
+  "half_time": {
+    "kick": "X.........x.....",
+    "snare": "........X.......",
+    "hat": "x...x...x...x..."
+  }
+}

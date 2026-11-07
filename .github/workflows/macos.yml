@@ -181,7 +181,7 @@ jobs:
             "$CLI" chords "tests/fixtures/$f.wav" --out "$RUNNER_TEMP/$f.chords.mid" | python3 -c "import json,sys; d=json.load(sys.stdin); p=d['progressions'][0]; print('$f', d['key'], '|', p['summary'], '|', ' '.join(p['chords'][:4]), '| engine', round(d['engine_ms'],1), 'ms')"
           done
 
-      - name: Bass patterns against the schema
+      - name: Bass and drum patterns against their schemas
         run: python3 tools/validate_patterns.py
 
       - name: Basslines on the fixtures
@@ -191,6 +191,15 @@ jobs:
           for a in "house_124_Amin house" "techno_132_Fmin techno" "pop_100_Cmaj pop" "loop_8bar_Gmaj lofi"; do
             set -- $a
             "$CLI" bass "tests/fixtures/$1.wav" --style "$2" --out "$RUNNER_TEMP/$1.bass.mid" | python3 -c "import json,sys; d=json.load(sys.stdin); print('$1', d['progression'], d['pattern'], 'notes', d['note_count'], 'kicks', d['kicks'], 'sidechain', d['sidechain_notes'])"
+          done
+
+      - name: Drums on the fixtures (kicks on the detected downbeats; full + per-element export)
+        run: |
+          CLI=build/tools/cli/app-cli_artefacts/Release/app-cli
+          "$CLI" drums --list-patterns | python3 -c "import json,sys; print([p['name'] for p in json.load(sys.stdin)['patterns']])"
+          for a in "house_124_Amin house" "techno_132_Fmin techno" "pop_100_Cmaj pop" "loop_8bar_Gmaj lofi"; do
+            set -- $a
+            "$CLI" drums "tests/fixtures/$1.wav" --style "$2" --split --out "$RUNNER_TEMP/drums-$1" | python3 -c "import json,sys; d=json.load(sys.stdin); print('$1', d['pattern'], 'bars', d['bars'], 'kick error', d['kick_downbeat_max_error_ms'], 'ms', [f['stem'] for f in d['files']]); sys.exit(0 if d['kick_downbeat_max_error_ms'] < 5 else 1)"
           done
 
       - name: Stem separation with the CoreML execution provider (diagnostic)

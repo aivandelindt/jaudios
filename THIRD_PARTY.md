@@ -57,3 +57,7 @@ configuration); verify with `ffmpeg -L`/`av.library_versions` on the built bundl
 Key detection powered by OpenKeyScan (© Alexander Sommer, MIT License), based on
 MusicalKeyCNN (© a1ex90, MIT License). "OpenKeyScan" is used here as attribution only;
 it is not used in product naming or marketing.
+
+### Sounds
+The built-in drum kit (engine/synth/DrumSampler.cpp) is synthesised by JAudios' own code at load time; no third-party samples are
+bundled. User kits are loaded from the user's own folder and never shipped.

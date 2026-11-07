@@ -1,0 +1,31 @@
+{
+  "name": "techno_driving",
+  "style": "techno",
+  "description": "Driving techno: kick every beat, offbeat open hat, rolling 16th hats, perc on the 3rd 16th",
+  "bars": 2,
+  "lanes": {
+    "kick": "X...X...X...X...X...X...X...X...",
+    "clap": "....x.......x.......x.......x...",
+    "hat": "xoxoXoxoxoxoXoxoxoxoXoxoxoxoXoxo",
+    "openhat": "..x...x...x...x...x...x...x...x.",
+    "perc": "..o...o..o....o...o...o..o....o.",
+    "ride": "..x...x...x...x...x...x...x...x."
+  },
+  "fill": {
+    "kick": "X...X...X...X.X.",
+    "clap": "....x.......xxxx"
+  },
+  "riser_hit": {
+    "kick": "X...X...X...X...",
+    "clap": "x...x...x.x.xxXX",
+    "openhat": ""
+  },
+  "drop": {
+    "kick": "",
+    "openhat": "..x...x...x...X."
+  },
+  "half_time": {
+    "kick": "X.......X.......",
+    "clap": "........x......."
+  }
+}
