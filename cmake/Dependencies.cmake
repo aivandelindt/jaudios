@@ -33,6 +33,13 @@ set(SFIZZ_DEMOS OFF CACHE BOOL "" FORCE)
 set(SFIZZ_DEVTOOLS OFF CACHE BOOL "" FORCE)
 set(SFIZZ_USE_SNDFILE OFF CACHE BOOL "" FORCE)
 set(ENABLE_LTO OFF CACHE BOOL "" FORCE) # sfizz's own LTO switch; keeps its build time down
+# sfizz adds the 32-bit ARM flags -mfpu=neon -mfloat-abi=hard to every target when its processor
+# name matches "arm.*", and Apple Silicon's "arm64" does; clang rejects both for arm64 (macOS CI,
+# PR #10). AArch64 always has NEON, so give sfizz the name it treats as plain 64-bit ARM.
+if(APPLE AND NOT CMAKE_OSX_ARCHITECTURES MATCHES "x86_64"
+   AND (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64" OR (NOT CMAKE_OSX_ARCHITECTURES AND CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")))
+    set(PROJECT_SYSTEM_PROCESSOR "aarch64" CACHE STRING "Processor name for sfizz's flag selection" FORCE)
+endif()
 # sfizz must build as C++17: GCC rejects its hex float literals in its default C++14, and in C++20
 # its u8"" literals become char8_t. It runs set(CMAKE_CXX_STANDARD 14 CACHE ...) under old CMP0126,
 # which drops the normal variable in its scope, so set 17 both in the cache (first configure) and as
