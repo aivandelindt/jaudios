@@ -1,0 +1,16 @@
+{ "name": "funk_syncopated", "style": "rnb", "grid": 16, "bars": 2, "swing": 0.12,
+  "description": "Syncopated 16th funk over two bars: anticipations, ghosted passing tones, octave pops",
+  "steps": [
+    { "step": 0, "length": 2, "velocity": 116, "gate": 0.7, "role": "root" },
+    { "step": 3, "velocity": 84, "gate": 0.5, "role": "scale" },
+    { "step": 4, "velocity": 100, "gate": 0.6, "role": "octave" },
+    { "step": 7, "length": 2, "velocity": 104, "gate": 0.7, "role": "fifth" },
+    { "step": 10, "velocity": 96, "gate": 0.6, "role": "root" },
+    { "step": 12, "velocity": 88, "gate": 0.5, "role": "chord" },
+    { "step": 14, "velocity": 100, "gate": 0.6, "role": "approach" },
+    { "step": 16, "length": 3, "velocity": 114, "gate": 0.7, "role": "root" },
+    { "step": 19, "velocity": 86, "gate": 0.5, "role": "third" },
+    { "step": 22, "length": 2, "velocity": 102, "gate": 0.7, "role": "fifth" },
+    { "step": 26, "velocity": 96, "gate": 0.6, "role": "root" },
+    { "step": 28, "velocity": 92, "gate": 0.5, "role": "scale" },
+    { "step": 30, "length": 2, "velocity": 104, "gate": 0.7, "role": "approach" } ] }

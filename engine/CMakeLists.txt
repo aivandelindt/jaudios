@@ -50,7 +50,25 @@ if(JAUDIOS_WITH_ONNXRUNTIME)
     target_compile_definitions(engine_analysis PRIVATE JAUDIOS_HAS_ONNXRUNTIME=1)
 endif()
 
-jaudios_engine_lib(engine_generators SOURCES ${CMAKE_CURRENT_LIST_DIR}/generators/ChordEngine.cpp DEPS engine_theory)
+# bass-generator: patterns/*.json embedded as string literals (validated by tools/validate_patterns.py)
+file(GLOB _bass_patterns CONFIGURE_DEPENDS ${CMAKE_CURRENT_LIST_DIR}/generators/patterns/*.json)
+list(FILTER _bass_patterns EXCLUDE REGEX "schema\\.json$")
+list(SORT _bass_patterns)
+set(_embedded "// Generated from engine/generators/patterns/*.json by engine/CMakeLists.txt. Do not edit.\nnamespace jaudios::generators {\nextern const char* const embeddedBassPatterns[] = {\n")
+set(_count 0)
+foreach(_f ${_bass_patterns})
+    file(READ ${_f} _json)
+    string(APPEND _embedded "R\"JAUDIOSPATTERN(${_json})JAUDIOSPATTERN\",\n")
+    math(EXPR _count "${_count} + 1")
+endforeach()
+string(APPEND _embedded "};\nextern const int numEmbeddedBassPatterns = ${_count};\n}\n")
+file(CONFIGURE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/BassPatternsEmbedded.cpp CONTENT "${_embedded}" @ONLY)
+
+jaudios_engine_lib(engine_generators
+    SOURCES ${CMAKE_CURRENT_LIST_DIR}/generators/ChordEngine.cpp
+            ${CMAKE_CURRENT_LIST_DIR}/generators/BassGenerator.cpp
+            ${CMAKE_CURRENT_BINARY_DIR}/BassPatternsEmbedded.cpp
+    DEPS engine_theory jaudios_juce)
 jaudios_engine_lib(engine_synth      DEPS jaudios_juce)
 jaudios_engine_lib(engine_fx         DEPS jaudios_juce)
 jaudios_engine_lib(engine_export     DEPS jaudios_juce)

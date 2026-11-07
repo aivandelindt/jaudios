@@ -8,6 +8,7 @@ set(ENGINE_ANALYSIS_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/key/KeyDetector.cpp
     ${CMAKE_CURRENT_LIST_DIR}/key/KeyDetectorChroma.cpp
     ${CMAKE_CURRENT_LIST_DIR}/tempo/BeatTracker.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/tempo/KickDetector.cpp
     ${CMAKE_CURRENT_LIST_DIR}/Analysis.cpp
     ${CMAKE_CURRENT_LIST_DIR}/Log.cpp
     # key-detection-openkeyscan Phase A (sidecar)

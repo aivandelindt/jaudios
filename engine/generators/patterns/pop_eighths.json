@@ -1,0 +1,7 @@
+{ "name": "pop_eighths", "style": "pop", "grid": 8, "bars": 1,
+  "description": "Driving 8ths on the root with an octave lift on the and of 2",
+  "steps": [
+    { "step": 0, "velocity": 112, "role": "root" }, { "step": 1, "velocity": 88, "role": "root" },
+    { "step": 2, "velocity": 100, "role": "root" }, { "step": 3, "velocity": 92, "role": "octave" },
+    { "step": 4, "velocity": 104, "role": "root" }, { "step": 5, "velocity": 88, "role": "root" },
+    { "step": 6, "velocity": 98, "role": "fifth" }, { "step": 7, "velocity": 94, "role": "approach" } ] }
