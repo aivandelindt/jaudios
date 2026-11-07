@@ -324,6 +324,26 @@ TEST_CASE ("User kit folder: named files replace synthesised elements", "[drums]
     CHECK (err.contains ("no <element>"));
 }
 
+TEST_CASE ("Voice stealing: with every voice busy, an element retriggers its own oldest voice", "[drums][sampler]")
+{
+    const auto kit = synth::DrumKit::synthesised (44100.0);
+    synth::DrumSampler sampler (kit, 4);
+    juce::AudioBuffer<float> out (2, 64);
+    juce::MidiBuffer midi;
+    for (int i = 0; i < 4; ++i) // fill all four voices: 3 rides + 1 kick
+        midi.addEvent (juce::MidiMessage::noteOn (10, i < 3 ? 51 : 36, (juce::uint8) 100), i);
+    midi.addEvent (juce::MidiMessage::noteOn (10, 36, (juce::uint8) 100), 10); // another kick: steals the kick
+    sampler.renderNextBlock (out, midi, 0, 64);
+    int rides = 0, kicks = 0;
+    for (int v = 0; v < sampler.getNumVoices(); ++v)
+    {
+        rides += sampler.getVoice (v)->getCurrentlyPlayingNote() == 51 ? 1 : 0;
+        kicks += sampler.getVoice (v)->getCurrentlyPlayingNote() == 36 ? 1 : 0;
+    }
+    CHECK (rides == 3);
+    CHECK (kicks == 1);
+}
+
 TEST_CASE ("Drum sampler renders without allocating in realtime sections", "[drums][sampler][rt]")
 {
     if (! rt::isTrapInstalled())

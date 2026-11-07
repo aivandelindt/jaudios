@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Drum generator (M6)
+- Grooves: `engine/generators/drums/*.json` against `drums/schema.json` (house four-on-the-floor, minimal house 4-bar,
+  techno, trance, pop backbeat, lo-fi with swing + ghosts, R&B shuffle, cinematic toms): 1/16 lanes for kick / snare / clap /
+  hat / open hat / perc / ride over 2-8 bars, plus one-bar fill, riser_hit, drop and half_time variants. Embedded at configure
+  time; `tools/validate_patterns.py` now checks both libraries (`$ref` support, drum lane lengths).
+- `generators::generateDrums()`: the groove on the detected bars (steps subdivide each bar, so tempo drift is followed; step 0 is
+  the downbeat itself). Options: kick on/off, transitions on the last bar of every phrase (a riser-hit lands an accented kick + open
+  hat on the next downbeat), intensity 1-5 (elements, ghost notes, velocity), swing.
+- `engine/synth/DrumSampler`: JAudios' own synthesised kit (no third-party samples): 3 velocity layers x 3 round robins per element;
+  user kits from a folder of `<element>[_v<n>][_rr<n>].wav` files (resampled; missing elements stay synthesised); a
+  `juce::Synthesiser` with one-shot voices, round robin, velocity layers, closed-hat choke and per-element pan; allocation-free
+  `renderNextBlock` (`[rt]` test); offline `renderDrums()` and GM `drumsToMidi()`.
+- `app-cli drums <file> [--style] [--pattern] [--intensity] [--no-kick] [--transition] [--phrase] [--swing] [--kit DIR] [--split]
+  [--out DIR]`: `drums.wav` + `drums.mid`, or one WAV + MIDI per element.
+- Acceptance (skill: kicks within 5 ms of the detected downbeats): exact in the MIDI (0.000 ms) and within 5 ms in the rendered audio
+  for every pattern on house, techno, pop and the loop; kick onsets in the sampler output are sample-accurate (< 1 ms).
+- Not yet: the drums channel in the live engine graph (playback in the app comes with the synth / UI milestones).
+
 ### Bass generator (M5)
 - Patterns: `engine/generators/patterns/*.json` (pop root, pop 8ths, house offbeat, techno rolling 1/16, trance rolling,
   syncopated funk (2 bars, swing), walking, whole notes) against `patterns/schema.json`; embedded at configure time.

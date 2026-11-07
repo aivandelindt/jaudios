@@ -335,6 +335,26 @@ void DrumSampler::noteOn (int channel, int note, float velocity)
     juce::Synthesiser::noteOn (channel, note, velocity);
 }
 
+juce::SynthesiserVoice* DrumSampler::findFreeVoice (juce::SynthesiserSound* sound, int, int note, bool steal) const
+{
+    const juce::ScopedLock sl (lock);
+    juce::SynthesiserVoice *sameNote = nullptr, *oldest = nullptr;
+    for (auto* v : voices)
+    {
+        if (! v->canPlaySound (sound))
+            continue;
+        if (! v->isVoiceActive())
+            return v;
+        if (v->getCurrentlyPlayingNote() == note && (sameNote == nullptr || v->wasStartedBefore (*sameNote)))
+            sameNote = v;
+        if (oldest == nullptr || v->wasStartedBefore (*oldest))
+            oldest = v;
+    }
+    if (! steal)
+        return nullptr;
+    return sameNote != nullptr ? sameNote : oldest;
+}
+
 juce::AudioBuffer<float> renderDrums (const std::vector<DrumNote>& notes, const DrumKit& kit, double sr, int numSamples,
                                       std::optional<DrumElement> only)
 {

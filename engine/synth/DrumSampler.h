@@ -40,6 +40,10 @@ class DrumSampler final : public juce::Synthesiser
 public:
     explicit DrumSampler (const DrumKit&, int numVoices = 24);
     void noteOn (int midiChannel, int midiNoteNumber, float velocity) override;
+    /** Allocation-free voice stealing (juce::Synthesiser's findVoiceToSteal clears and refills an
+        Array, which reallocates on the audio thread): a busy element retriggers its own oldest
+        voice, otherwise the oldest voice overall is reused. */
+    juce::SynthesiserVoice* findFreeVoice (juce::SynthesiserSound*, int midiChannel, int midiNoteNumber, bool stealIfNoneAvailable) const override;
     /** Mute every element but `only` (offline per-element export). */
     void solo (std::optional<DrumElement> only) noexcept { soloElement = only; }
 

@@ -20,6 +20,12 @@
 //                [--out FILE.mid] [--no-cache] | app-cli bass --list-patterns
 //                                               a bassline on the top chord progression and the detected
 //                                               groove (kick sidechain hints), as JSON + MIDI
+//   app-cli drums <audio-file> [--style ...] [--pattern NAME] [--intensity 1..5] [--no-kick]
+//                 [--transition fill|riser_hit|drop|half_time|none] [--phrase BARS] [--swing 0..0.75]
+//                 [--kit DIR] [--split] [--out DIR] | app-cli drums --list-patterns
+//                                               a groove on the detected downbeats, rendered with the
+//                                               built-in (or a user) kit: drums.wav + drums.mid, or one
+//                                               WAV + MIDI per element (--split)
 
 #include "app/core/AnalysisService.h"
 #include "app/core/AudioEngine.h"
@@ -34,6 +40,8 @@
 #include "engine/analysis/tempo/BeatTracker.h"
 #include "engine/analysis/tempo/KickDetector.h"
 #include "engine/generators/BassGenerator.h"
+#include "engine/generators/DrumGenerator.h"
+#include "engine/synth/DrumSampler.h"
 #include "engine/analysis/transcription/AudioToMidi.h"
 #include "engine/analysis/transcription/Quantize.h"
 
@@ -78,7 +86,11 @@ int usage()
                  "                   [--out FILE.mid] [--no-cache]\n"
                  "  app-cli bass <audio-file> [--style ...] [--pattern NAME] [--stems] [--grid 8|16|32] [--swing 0..0.75]\n"
                  "                   [--out FILE.mid] [--no-cache]\n"
-                 "  app-cli bass --list-patterns\n";
+                 "  app-cli bass --list-patterns\n"
+                 "  app-cli drums <audio-file> [--style ...] [--pattern NAME] [--intensity 1..5] [--no-kick]\n"
+                 "                   [--transition fill|riser_hit|drop|half_time|none] [--phrase BARS] [--swing 0..0.75]\n"
+                 "                   [--kit DIR] [--split] [--out DIR]\n"
+                 "  app-cli drums --list-patterns\n";
     return 2;
 }
 
@@ -801,6 +813,165 @@ int cmdBass (const juce::File& file, BassOptions opt)
     return 0;
 }
 
+struct DrumOptions
+{
+    jaudios::generators::Style style = jaudios::generators::Style::house;
+    std::string pattern;
+    jaudios::generators::DrumSettings drums;
+    juce::File kitDir, out;
+    bool split = false;
+};
+
+int cmdListDrumPatterns()
+{
+    juce::Array<var> list;
+    for (const auto& p : jaudios::generators::builtinDrumPatterns())
+    {
+        juce::StringArray elements;
+        for (int e = 0; e < jaudios::generators::numDrumElements; ++e)
+            if (! p.lanes[(size_t) e].empty())
+                elements.add (jaudios::generators::elementName ((jaudios::generators::DrumElement) e));
+        list.add (makeObject ({ { "name", juce::String (p.name) }, { "style", juce::String (p.style) }, { "bars", p.bars },
+                                { "swing", p.swing }, { "elements", elements.joinIntoString (" ") },
+                                { "description", juce::String (p.description) } }));
+    }
+    printJson (makeObject ({ { "patterns", list } }));
+    return 0;
+}
+
+int cmdDrums (const juce::File& file, DrumOptions opt)
+{
+    using namespace jaudios::analysis;
+    namespace gen = jaudios::generators;
+    double importMs = 0.0;
+    const auto capture = importOrReport (file, importMs);
+    if (! capture)
+        return 1;
+    const gen::DrumPattern* pattern = opt.pattern.empty() ? gen::drumPatternsFor (opt.style).front() : gen::findDrumPattern (opt.pattern);
+    if (pattern == nullptr)
+    {
+        std::cerr << "error: no drum pattern '" << opt.pattern << "' (app-cli drums --list-patterns)\n";
+        return 2;
+    }
+
+    // the beat grid of the source (bars between detected downbeats), on the worker like the app
+    jaudios::AnalysisService service;
+    std::optional<RhythmResult> rhythm;
+    service.submit<RhythmResult> (
+        [&] {
+            juce::AudioBuffer<float> mono (1, capture->buffer.getNumSamples());
+            mono.clear();
+            for (int ch = 0; ch < capture->buffer.getNumChannels(); ++ch)
+                mono.addFrom (0, 0, capture->buffer, ch, 0, mono.getNumSamples(), 1.0f / (float) capture->buffer.getNumChannels());
+            return analyzeRhythm (mono.getReadPointer (0), mono.getNumSamples(), capture->sampleRate);
+        },
+        [&] (RhythmResult r) { rhythm = std::move (r); });
+    service.waitUntilIdle();
+
+    std::vector<std::pair<double, double>> bars;
+    for (const auto& b : rhythm->bars)
+        bars.push_back ({ b.startSec, b.endSec });
+    if (bars.empty() && rhythm->beats.size() >= 5)
+        for (size_t i = 0; i + 4 < rhythm->beats.size(); i += 4)
+            bars.push_back ({ rhythm->beats[i], rhythm->beats[i + 4] });
+    if (bars.empty())
+    {
+        std::cerr << "error: no beat grid found in " << file.getFileName() << "\n";
+        return 1;
+    }
+
+    const auto notes = gen::generateDrums (bars, *pattern, opt.drums);
+    const double sr = capture->sampleRate;
+    jaudios::synth::DrumKit kit;
+    if (opt.kitDir != juce::File())
+    {
+        juce::String err;
+        auto loaded = jaudios::synth::DrumKit::loadFolder (opt.kitDir, sr, err);
+        if (! loaded)
+        {
+            std::cerr << "error: " << err << "\n";
+            return 1;
+        }
+        kit = std::move (*loaded);
+    }
+    else
+        kit = jaudios::synth::DrumKit::synthesised (sr);
+
+    // kick on the one vs the detected downbeats (skill acceptance: within 5 ms)
+    double worstKickMs = 0.0;
+    int kicksOnDownbeats = 0;
+    for (const auto& n : notes)
+        if (n.element == gen::DrumElement::kick && n.step == 0)
+        {
+            double best = 1e9;
+            for (double d : rhythm->downbeats)
+                best = std::min (best, std::abs (n.startSec - d));
+            for (const auto& b : bars)
+                best = std::min (best, std::abs (n.startSec - b.first));
+            worstKickMs = std::max (worstKickMs, best * 1000.0);
+            ++kicksOnDownbeats;
+        }
+
+    if (opt.out == juce::File())
+        opt.out = file.getSiblingFile (file.getFileNameWithoutExtension() + ".drums");
+    opt.out.createDirectory();
+    const int length = (int) std::ceil ((bars.back().second + 2.0) * sr);
+    const double bpm = rhythm->bpm > 0.0 ? rhythm->bpm : 120.0;
+    const auto t0 = juce::Time::getMillisecondCounterHiRes();
+    bool ok = true;
+    juce::Array<var> files;
+    auto exportOne = [&] (const juce::String& stem, std::optional<gen::DrumElement> only) {
+        const auto wavFile = opt.out.getChildFile (stem + ".wav"), midFile = opt.out.getChildFile (stem + ".mid");
+        writeWav (wavFile, jaudios::synth::renderDrums (notes, kit, sr, length, only), sr, ok);
+        ok = writeMidiFile (midFile, jaudios::synth::drumsToMidi (notes, only), bpm) && ok;
+        int count = 0;
+        for (const auto& n : notes)
+            count += (! only || n.element == *only) ? 1 : 0;
+        files.add (makeObject ({ { "stem", stem }, { "notes", count }, { "wav", wavFile.getFullPathName() }, { "midi", midFile.getFullPathName() } }));
+    };
+    exportOne ("drums", std::nullopt);
+    if (opt.split)
+        for (int e = 0; e < gen::numDrumElements; ++e)
+        {
+            const auto el = (gen::DrumElement) e;
+            if (std::any_of (notes.begin(), notes.end(), [&] (const gen::DrumNote& n) { return n.element == el; }))
+                exportOne (gen::elementName (el), el);
+        }
+    if (! ok)
+    {
+        std::cerr << "error: export to " << opt.out.getFullPathName() << " failed\n";
+        return 1;
+    }
+
+    juce::Array<var> perElement;
+    for (int e = 0; e < gen::numDrumElements; ++e)
+    {
+        const auto el = (gen::DrumElement) e;
+        const auto c = std::count_if (notes.begin(), notes.end(), [&] (const gen::DrumNote& n) { return n.element == el; });
+        if (c > 0)
+            perElement.add (makeObject ({ { "element", gen::elementName (el) }, { "notes", (int) c } }));
+    }
+    printJson (makeObject ({
+        { "file", file.getFullPathName() },
+        { "pattern", juce::String (pattern->name) },
+        { "style", juce::String (pattern->style) },
+        { "kit", kit.name },
+        { "bpm", bpm },
+        { "bars", (int) bars.size() },
+        { "intensity", opt.drums.intensity },
+        { "kick", opt.drums.includeKick },
+        { "transition", opt.drums.transitions ? var (gen::variantName (opt.drums.transition)) : var ("none") },
+        { "note_count", (int) notes.size() },
+        { "elements", perElement },
+        { "kicks_on_downbeats", kicksOnDownbeats },
+        { "kick_downbeat_max_error_ms", worstKickMs },
+        { "render_ms", juce::Time::getMillisecondCounterHiRes() - t0 },
+        { "files", files },
+        { "import_ms", importMs },
+    }));
+    return 0;
+}
+
 } // namespace
 
 int main (int argc, char** argv)
@@ -817,6 +988,8 @@ int main (int argc, char** argv)
 
     if (cmd == "bass" && argc >= 3 && juce::String (argv[2]) == "--list-patterns")
         return cmdListPatterns();
+    if (cmd == "drums" && argc >= 3 && juce::String (argv[2]) == "--list-patterns")
+        return cmdListDrumPatterns();
 
     if (argc < 3)
         return usage();
@@ -972,6 +1145,44 @@ int main (int argc, char** argv)
             else return usage();
         }
         return cmdBass (file, opt);
+    }
+
+    if (cmd == "drums")
+    {
+        namespace gen = jaudios::generators;
+        DrumOptions opt;
+        for (int i = 3; i < argc; ++i)
+        {
+            const juce::String a (argv[i]);
+            const bool hasValue = i + 1 < argc;
+            if (a == "--no-kick") opt.drums.includeKick = false;
+            else if (a == "--split") opt.split = true;
+            else if (a == "--style" && hasValue)
+            {
+                const auto st = gen::styleFromName (argv[++i]);
+                if (! st)
+                    return usage();
+                opt.style = *st;
+            }
+            else if (a == "--pattern" && hasValue) opt.pattern = argv[++i];
+            else if (a == "--intensity" && hasValue) opt.drums.intensity = juce::jlimit (1, 5, juce::String (argv[++i]).getIntValue());
+            else if (a == "--phrase" && hasValue) opt.drums.phraseBars = juce::jlimit (1, 64, juce::String (argv[++i]).getIntValue());
+            else if (a == "--swing" && hasValue) opt.drums.swingOverride = juce::jlimit (0.0, 0.75, juce::String (argv[++i]).getDoubleValue());
+            else if (a == "--kit" && hasValue) opt.kitDir = argFile (argv[++i]);
+            else if (a == "--out" && hasValue) opt.out = argFile (argv[++i]);
+            else if (a == "--transition" && hasValue)
+            {
+                const juce::String t (argv[++i]);
+                if (t == "none")
+                    opt.drums.transitions = false;
+                else if (const auto v = gen::variantFromName (t))
+                    opt.drums.transition = *v;
+                else
+                    return usage();
+            }
+            else return usage();
+        }
+        return cmdDrums (file, opt);
     }
 
     return usage();
