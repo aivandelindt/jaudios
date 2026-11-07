@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Built-in instruments + generated channels in the engine (M7a, synth-and-vst3-host)
+- sfizz 1.2.3 (BSD-2, stack table; approved) via FetchContent, static, apps/tests off. It builds as C++17 inside its own scope (GCC rejects
+  its hex-float literals under its default C++14; C++20 turns its `u8""` literals into `char8_t`); our targets stay C++20.
+- `engine/synth/presets/*.sfz`: our own patches on sfizz's oscillators (no samples): piano + electric keys (keys), warm pad (pad), pluck
+  (pluck), sub bass + saw bass (bass); embedded at configure time; `sfzCategories()` for the preset browser.
+- `synth::Instrument` interface; `SfzInstrument` (sfizz; note on / off, pitch wheel, CC, all-sound-off; sample-accurate) and
+  `DrumInstrument` (the M6 sampler; rebuilds its kit for the device rate).
+- Engine: `ClipPlayerProcessor` per generated channel (chords, bass, drums) -> strip -> master. Clips and instruments swap through the
+  lock-free ownership protocol; `AudioEngine::play() / stop() / seek()` drive the source and all clip players together (sample-accurate
+  in step); instruments are prepared off the audio thread. Bypass mutes the generated channels and the stems and passes the source
+  through, leaving mutes / solos as they were (so leaving bypass restores them). `[rt]` tests: SFZ + drums instruments and the full graph
+  with generated channels render with zero allocations; `tools/rt_check.sh` PASS.
+- `app-cli audition <file> [--style] [--chords] [--bass] [--no-drums] [--stems] [--bypass] [--out FILE.wav]`: generates chords, bass and
+  drums for the file and renders source + parts through the engine graph (29-118x realtime on the fixtures); `--list-presets`.
+- Fixed while testing: an offline render that sets mixer state after preparing ramped into it over 20 ms (bypass leaked the first
+  chord). The CLI sets the state first; prepare snaps the strips to it (regression test). The GUI's play / stop / seek now drive the
+  whole transport.
+
 ### Drum generator (M6)
 - Grooves: `engine/generators/drums/*.json` against `drums/schema.json` (house four-on-the-floor, minimal house 4-bar,
   techno, trance, pop backbeat, lo-fi with swing + ghosts, R&B shuffle, cinematic toms): 1/16 lanes for kick / snare / clap /

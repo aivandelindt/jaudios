@@ -4,6 +4,7 @@
 |----------------------|-----------------------------|------------|-----------------------------------------|-----------------------------|
 | JUCE                 | 8.0.15 (FetchContent, pinned tag) | AGPL/Commercial → **commercial license required before release** (tracked in #TBD) | Raw Material Software | App framework |
 | Catch2               | v3.9.1 (FetchContent, pinned tag) | BSL-1.0 | Catch2 authors | Unit tests only, never shipped |
+| sfizz                | 1.2.3 (commit 4e70dc0b, FetchContent, static) | BSD-2-Clause | sfizz contributors | Built-in SFZ instruments (chords / bass channels). Approved 2026-11-07. Bundled, statically linked: abseil-cpp (Apache-2.0), st_audiofile (BSD-2) with dr_libs (public domain / MIT-0), libaiff (MIT) and WavPack (BSD-3; its GPL xmms plugin is not built), simde (MIT), ghc filesystem (MIT), atomic_queue (MIT), jsl (Boost-1.0), pugixml (MIT), kiss_fft (BSD-3), cpuid (BSD-3), spline (BSD-3), tunings (MIT), hiir (WTFPL), cephes (BSD, by author permission). Its Faust-generated filters come from faustlibraries under the LGPL with Faust's exception for generated code. Licence texts to ship with the app (packaging) |
 | ONNX Runtime         | 1.19.2 — official prebuilt binaries from the `Microsoft.ML.OnnxRuntime` NuGet package (cmake/OnnxRuntime.cmake, sha256 fa133c8f…) | MIT | Microsoft Corporation | Phase B key model inference (CPU; CoreML EP on macOS). Linked dynamically; package ThirdPartyNotices.txt to be shipped with the app |
 | Demucs (htdemucs)    | demucs 4.1.0, checkpoint `955717e8-8726e21a.th` (sha256 8726e21a…, models/manifest.json) | MIT | Meta Platforms, Inc. | Stem separation. Weights exported to ONNX on the user's machine (ml/export_demucs.py), never bundled (174 MB); STFT/ISTFT and segmenting re-implemented in C++ from demucs 4.1.0 |
 | Basic Pitch          | basic-pitch 0.4.0 wheel, `nmp.onnx` (ICASSP 2022 model), sha256 2c3c1d14… (models/manifest.json) | Apache-2.0 | Spotify AB | Audio-to-MIDI. Upstream's own ONNX file, fetched by ml/fetch_basic_pitch.py and used byte-for-byte (230 KB); inference windowing and note creation re-implemented in C++ from basic-pitch 0.4.0. NOTICE to ship with the app |
@@ -59,5 +60,6 @@ MusicalKeyCNN (© a1ex90, MIT License). "OpenKeyScan" is used here as attributio
 it is not used in product naming or marketing.
 
 ### Sounds
-The built-in drum kit (engine/synth/DrumSampler.cpp) is synthesised by JAudios' own code at load time; no third-party samples are
-bundled. User kits are loaded from the user's own folder and never shipped.
+The built-in drum kit (engine/synth/DrumSampler.cpp) is synthesised by JAudios' own code at load time, and the built-in SFZ presets
+(engine/synth/presets/*.sfz) are JAudios' own patches using sfizz's oscillators; no third-party samples are bundled. User kits and
+SFZ files are loaded from the user's own folders and never shipped.

@@ -26,4 +26,6 @@ set(JAUDIOS_TEST_SOURCES
     # bass-generator
     ${CMAKE_CURRENT_LIST_DIR}/test_bass_generator.cpp
     # drum-generator
-    ${CMAKE_CURRENT_LIST_DIR}/test_drums.cpp)
+    ${CMAKE_CURRENT_LIST_DIR}/test_drums.cpp
+    # synth-and-vst3-host
+    ${CMAKE_CURRENT_LIST_DIR}/test_instruments.cpp)

@@ -26,6 +26,11 @@
 //                                               a groove on the detected downbeats, rendered with the
 //                                               built-in (or a user) kit: drums.wav + drums.mid, or one
 //                                               WAV + MIDI per element (--split)
+//   app-cli audition <audio-file> [--style ...] [--chords PRESET] [--bass PRESET] [--no-drums] [--stems]
+//                    [--bypass] [--out FILE.wav] | app-cli audition --list-presets
+//                                               chords + bass + drums generated for the file, played by the
+//                                               built-in instruments through the engine graph with the
+//                                               source (offline render of what the app plays)
 
 #include "app/core/AnalysisService.h"
 #include "app/core/AudioEngine.h"
@@ -42,6 +47,7 @@
 #include "engine/generators/BassGenerator.h"
 #include "engine/generators/DrumGenerator.h"
 #include "engine/synth/DrumSampler.h"
+#include "engine/synth/SfzInstrument.h"
 #include "engine/analysis/transcription/AudioToMidi.h"
 #include "engine/analysis/transcription/Quantize.h"
 
@@ -90,7 +96,10 @@ int usage()
                  "  app-cli drums <audio-file> [--style ...] [--pattern NAME] [--intensity 1..5] [--no-kick]\n"
                  "                   [--transition fill|riser_hit|drop|half_time|none] [--phrase BARS] [--swing 0..0.75]\n"
                  "                   [--kit DIR] [--split] [--out DIR]\n"
-                 "  app-cli drums --list-patterns\n";
+                 "  app-cli drums --list-patterns\n"
+                 "  app-cli audition <audio-file> [--style ...] [--chords PRESET] [--bass PRESET] [--no-drums] [--stems]\n"
+                 "                   [--bypass] [--out FILE.wav]\n"
+                 "  app-cli audition --list-presets\n";
     return 2;
 }
 
@@ -972,6 +981,161 @@ int cmdDrums (const juce::File& file, DrumOptions opt)
     return 0;
 }
 
+int cmdListPresets()
+{
+    juce::Array<var> cats;
+    for (const auto& c : jaudios::synth::sfzCategories())
+    {
+        juce::Array<var> presets;
+        for (const auto& p : jaudios::synth::builtinSfzPresets())
+            if (p.category == c)
+                presets.add (makeObject ({ { "id", juce::String (p.id) }, { "name", juce::String (p.name) } }));
+        cats.add (makeObject ({ { "category", juce::String (c) }, { "presets", presets } }));
+    }
+    printJson (makeObject ({ { "categories", cats } }));
+    return 0;
+}
+
+struct AuditionOptions
+{
+    jaudios::generators::EngineSettings engine;
+    std::string chordsPreset, bassPreset;
+    bool drums = true, stems = false, bypass = false;
+    juce::File out;
+};
+
+int cmdAudition (const juce::File& file, AuditionOptions opt)
+{
+    using namespace jaudios::analysis;
+    namespace gen = jaudios::generators;
+    namespace sy = jaudios::synth;
+    double importMs = 0.0;
+    const auto capture = importOrReport (file, importMs);
+    if (! capture)
+        return 1;
+
+    const auto style = opt.engine.style;
+    if (opt.chordsPreset.empty())
+        opt.chordsPreset = style == gen::Style::pop || style == gen::Style::cinematic ? "piano"
+                         : style == gen::Style::lofi || style == gen::Style::rnb ? "keys"
+                         : style == gen::Style::trance ? "pluck" : "pad";
+    if (opt.bassPreset.empty())
+        opt.bassPreset = style == gen::Style::techno || style == gen::Style::trance ? "saw_bass" : "sub_bass";
+    const auto* chordsPreset = sy::findSfzPreset (opt.chordsPreset);
+    const auto* bassPreset = sy::findSfzPreset (opt.bassPreset);
+    if (chordsPreset == nullptr || bassPreset == nullptr)
+    {
+        std::cerr << "error: unknown preset (app-cli audition --list-presets)\n";
+        return 2;
+    }
+
+    // generate: chords (top progression), bass on it, drums on the bars
+    auto harmony = runHarmony (*capture, opt.engine, opt.stems, true);
+    if (! harmony)
+        return 1;
+    const auto& top = harmony->progressions.front();
+    const auto key = harmony->source.key;
+    gen::BassInput bassIn;
+    bassIn.key = key;
+    for (const auto& b : harmony->source.bars)
+        bassIn.bars.push_back ({ b.startSec, b.endSec });
+    bassIn.progression = top;
+    {
+        juce::AudioBuffer<float> mono (1, capture->buffer.getNumSamples());
+        mono.clear();
+        for (int ch = 0; ch < capture->buffer.getNumChannels(); ++ch)
+            mono.addFrom (0, 0, capture->buffer, ch, 0, mono.getNumSamples(), 1.0f / (float) capture->buffer.getNumChannels());
+        bassIn.kicks = detectKicks (mono.getReadPointer (0), mono.getNumSamples(), capture->sampleRate);
+    }
+    const auto bassNotes = gen::generateBass (bassIn, *gen::bassPatternsFor (style).front());
+    gen::DrumSettings drumSettings;
+    drumSettings.includeKick = true;
+    const auto drumNotes = opt.drums ? gen::generateDrums (bassIn.bars, *gen::drumPatternsFor (style).front(), drumSettings)
+                                     : std::vector<gen::DrumNote> {};
+
+    juce::MidiMessageSequence chordSeq, bassSeq;
+    for (const auto& n : gen::render (top))
+    {
+        chordSeq.addEvent (juce::MidiMessage::noteOn (1, n.pitch, (juce::uint8) n.velocity).withTimeStamp (n.startSec));
+        chordSeq.addEvent (juce::MidiMessage::noteOff (1, n.pitch).withTimeStamp (n.endSec));
+    }
+    for (const auto& n : bassNotes)
+    {
+        bassSeq.addEvent (juce::MidiMessage::noteOn (1, n.pitch, (juce::uint8) n.velocity).withTimeStamp (n.startSec));
+        bassSeq.addEvent (juce::MidiMessage::noteOff (1, n.pitch).withTimeStamp (n.endSec));
+    }
+    chordSeq.sort();
+    bassSeq.sort();
+
+    // the engine graph, exactly as the app plays it (offline: fixed 512-sample device blocks)
+    const double sr = capture->sampleRate;
+    jaudios::AudioEngine engine;
+    // mixer state first: prepare snaps every strip's gain smoother to it, so the render starts in
+    // that state instead of ramping into it (live toggles ramp over 20 ms, click-free)
+    engine.setChannelGainDecibels (jaudios::ChannelId::source, -6.0f);
+    engine.setChannelGainDecibels (jaudios::ChannelId::chords, -12.0f);
+    engine.setChannelGainDecibels (jaudios::ChannelId::bass, -9.0f);
+    engine.setChannelGainDecibels (jaudios::ChannelId::drums, -10.0f);
+    engine.setBypass (opt.bypass);
+    engine.prepareOffline (sr, 512);
+    engine.setSource (std::make_shared<const juce::AudioBuffer<float>> (capture->buffer));
+    auto chords = std::make_shared<sy::SfzInstrument>();
+    auto bass = std::make_shared<sy::SfzInstrument>();
+    if (! chords->load (*chordsPreset) || ! bass->load (*bassPreset))
+    {
+        std::cerr << "error: could not load the built-in presets\n";
+        return 1;
+    }
+    engine.setChannelInstrument (jaudios::ChannelId::chords, chords);
+    engine.setChannelInstrument (jaudios::ChannelId::bass, bass);
+    engine.setChannelClip (jaudios::ChannelId::chords, std::make_shared<const jaudios::MidiClip> (jaudios::makeClip (chordSeq, sr)));
+    engine.setChannelClip (jaudios::ChannelId::bass, std::make_shared<const jaudios::MidiClip> (jaudios::makeClip (bassSeq, sr)));
+    if (opt.drums)
+    {
+        engine.setChannelInstrument (jaudios::ChannelId::drums, std::make_shared<sy::DrumInstrument>());
+        engine.setChannelClip (jaudios::ChannelId::drums, std::make_shared<const jaudios::MidiClip> (jaudios::makeClip (sy::drumsToMidi (drumNotes), sr)));
+    }
+    engine.play();
+
+    const int n = capture->buffer.getNumSamples();
+    juce::AudioBuffer<float> mix (2, n), block (2, 512);
+    const auto t0 = juce::Time::getMillisecondCounterHiRes();
+    for (int pos = 0; pos < n; pos += 512)
+    {
+        const int len = std::min (512, n - pos);
+        engine.renderBlock (block.getArrayOfWritePointers(), 2, len);
+        for (int ch = 0; ch < 2; ++ch)
+            mix.copyFrom (ch, pos, block, ch, 0, len);
+    }
+    const double renderMs = juce::Time::getMillisecondCounterHiRes() - t0;
+    engine.stop();
+
+    if (opt.out == juce::File())
+        opt.out = file.getSiblingFile (file.getFileNameWithoutExtension() + ".audition.wav");
+    opt.out.getParentDirectory().createDirectory();
+    bool ok = true;
+    writeWav (opt.out, mix, sr, ok);
+    if (! ok)
+        return 1;
+    printJson (makeObject ({
+        { "file", file.getFullPathName() },
+        { "key", juce::String (jaudios::theory::traditionalName (key)) },
+        { "progression", juce::String (top.summary (key)) },
+        { "chords_preset", juce::String (chordsPreset->id) },
+        { "bass_preset", juce::String (bassPreset->id) },
+        { "drums", opt.drums ? var (juce::String (gen::drumPatternsFor (style).front()->name)) : var ("off") },
+        { "bypass", opt.bypass },
+        { "notes", makeObject ({ { "chords", chordSeq.getNumEvents() / 2 }, { "bass", (int) bassNotes.size() }, { "drums", (int) drumNotes.size() } }) },
+        { "duration_sec", n / sr },
+        { "render_ms", renderMs },
+        { "realtime_factor", n / sr * 1000.0 / std::max (1e-6, renderMs) },
+        { "peak", (double) mix.getMagnitude (0, n) },
+        { "out", opt.out.getFullPathName() },
+        { "import_ms", importMs },
+    }));
+    return 0;
+}
+
 } // namespace
 
 int main (int argc, char** argv)
@@ -990,6 +1154,8 @@ int main (int argc, char** argv)
         return cmdListPatterns();
     if (cmd == "drums" && argc >= 3 && juce::String (argv[2]) == "--list-patterns")
         return cmdListDrumPatterns();
+    if (cmd == "audition" && argc >= 3 && juce::String (argv[2]) == "--list-presets")
+        return cmdListPresets();
 
     if (argc < 3)
         return usage();
@@ -1183,6 +1349,31 @@ int main (int argc, char** argv)
             else return usage();
         }
         return cmdDrums (file, opt);
+    }
+
+    if (cmd == "audition")
+    {
+        AuditionOptions opt;
+        for (int i = 3; i < argc; ++i)
+        {
+            const juce::String a (argv[i]);
+            const bool hasValue = i + 1 < argc;
+            if (a == "--no-drums") opt.drums = false;
+            else if (a == "--stems") opt.stems = true;
+            else if (a == "--bypass") opt.bypass = true;
+            else if (a == "--style" && hasValue)
+            {
+                const auto st = jaudios::generators::styleFromName (argv[++i]);
+                if (! st)
+                    return usage();
+                opt.engine.style = *st;
+            }
+            else if (a == "--chords" && hasValue) opt.chordsPreset = argv[++i];
+            else if (a == "--bass" && hasValue) opt.bassPreset = argv[++i];
+            else if (a == "--out" && hasValue) opt.out = argFile (argv[++i]);
+            else return usage();
+        }
+        return cmdAudition (file, opt);
     }
 
     return usage();

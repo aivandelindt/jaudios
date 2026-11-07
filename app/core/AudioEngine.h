@@ -10,8 +10,8 @@
 namespace jaudios
 {
 
-/** Mixer channels. Wired: `source` and the four stems (model order, see stemChannel()); chords/bass/drums
-    nodes land with their generators. */
+/** Mixer channels: `source`, the generated parts (chords, bass, drums: ClipPlayer + instrument) and
+    the four stems (model order, see stemChannel()). */
 enum class ChannelId : int { source = 0, chords, bass, drums, stemDrums, stemBass, stemOther, stemVocals };
 inline constexpr int numChannelIds = 8;
 
@@ -22,9 +22,12 @@ constexpr ChannelId stemChannel (int stemIndex) noexcept { return (ChannelId) ((
 
     Graph:        [SourcePlayer] ch 0-1 -> [Strip: source]      -> [Master] -> [Audio out]
                                  ch 2-9 -> [Strip: stem s] x 4  -> [Master]
-    Later:        [Chord synth] / [Bass synth] / [Drums] -> [Strip] -> FX -> [Master]
+                  [ClipPlayer: chords / bass / drums] -> [Strip] -> [Master]   (FX inserts: fx-chain)
 
     While stems are loaded the source strip is muted (the stems replace it) unless it is soloed.
+    play() / stop() / seek() drive the source and every clip player together (one transport).
+    Bypass mutes everything generated (and the stems) and passes the source through; mutes and
+    solos are left as they were, so leaving bypass restores the previous state.
 
     Threading:
       - message thread: device setup, transport commands, gain/mute/solo (all lock-free into RT)
@@ -55,6 +58,17 @@ public:
 
     // --- mixer / transport (message thread) -----------------------------------------------
     SourcePlayerProcessor& getSourcePlayer() noexcept { return *sourcePlayer; }
+    void play();
+    void stop();
+    void seek (juce::int64 transportSample);
+
+    /** A generated part on `channel` (chords, bass or drums): the clip to play, and its instrument
+        (prepared here, at the engine's rate, before it reaches the audio thread). */
+    bool setChannelClip (ChannelId, std::shared_ptr<const MidiClip>);
+    bool setChannelInstrument (ChannelId, std::shared_ptr<synth::Instrument>);
+    /** Bypass: mute every generated channel and the stems, pass the source through. */
+    void setBypass (bool);
+    bool isBypassed() const noexcept { return bypassed; }
     /** Stems of the current source (8 channels: stem s, channel c -> 2s+c; same length), or
         nullptr to go back to the source. */
     bool setStems (std::shared_ptr<const juce::AudioBuffer<float>> stems);
@@ -86,6 +100,9 @@ private:
     juce::AudioProcessorGraph graph;
 
     SourcePlayerProcessor* sourcePlayer = nullptr; // owned by graph
+    ClipPlayerProcessor* clipPlayer (ChannelId) const noexcept;
+    std::array<ClipPlayerProcessor*, 3> clipPlayers {}; // chords, bass, drums (owned by graph)
+    bool bypassed = false;
     std::array<ChannelStripProcessor*, numChannelIds> strips {};
     ChannelStripProcessor* master = nullptr;
 

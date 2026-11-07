@@ -14,9 +14,9 @@ MainComponent::MainComponent()
 
     settingsButton.onClick = [this] { showAudioSettings(); };
     openButton.onClick = [this] { showOpenDialog(); };
-    playButton.onClick = [this] { engine.getSourcePlayer().play(); };
-    stopButton.onClick = [this] { engine.getSourcePlayer().stop(); };
-    waveform.onSeek = [this] (double t) { engine.getSourcePlayer().seek ((juce::int64) (t * analysis::analysisSampleRate)); };
+    playButton.onClick = [this] { engine.play(); };
+    stopButton.onClick = [this] { engine.stop(); };
+    waveform.onSeek = [this] (double t) { engine.seek ((juce::int64) (t * analysis::analysisSampleRate)); };
 
     deviceError = engine.openDefaultDevice (AudioEngine::defaultBlockSize);
 
@@ -132,7 +132,7 @@ void MainComponent::onImported (ImportJobResult r)
                  + juce::String (c.originalSampleRate, 0) + " Hz -> " + juce::String (c.sampleRate, 0) + " Hz, "
                  + juce::String (c.originalNumChannels) + " ch, " + juce::String (c.durationSeconds(), 2) + " s";
 
-    engine.getSourcePlayer().stop();
+    engine.stop();
     engine.setSource (std::make_shared<const juce::AudioBuffer<float>> (std::move (c.buffer)));
     waveform.setPeaks (std::move (r.peaks));
 

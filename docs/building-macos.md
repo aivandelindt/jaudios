@@ -241,6 +241,22 @@ To use your own samples, put files named `<element>[_v<layer>][_rr<n>].wav` (e.g
 sound. Groove files live in `engine/generators/drums/*.json` and must pass
 `python3 tools/validate_patterns.py`.
 
+## 3g. Built-in instruments (audition)
+
+The chord, bass and drum channels play through built-in instruments in the engine graph, on the
+same transport as the source. The melodic instruments are SFZ patches written for JAUDIOS and played
+by sfizz (BSD-2, fetched and built with the rest of the project). They use sfizz's oscillators, so no
+sample files are involved. The drums use the built-in kit from section 3f. To hear what the app
+plays, render it offline:
+
+```bash
+build/tools/cli/app-cli_artefacts/Release/app-cli audition tests/fixtures/house_124_Amin.wav --style house --out /tmp/house.audition.wav
+```
+
+Options: `--chords PRESET`, `--bass PRESET` (`--list-presets`: piano and keys, pad, pluck, sub bass
+and saw bass), `--no-drums`, `--stems`, `--bypass` (the source alone, as the app's bypass switch
+plays it).
+
 ## 4. Run
 
 The app:

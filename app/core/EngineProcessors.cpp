@@ -1,6 +1,7 @@
 #include "EngineProcessors.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace jaudios
 {
@@ -115,6 +116,158 @@ void SourcePlayerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
 
     positionForUi.store (readPosition, std::memory_order_relaxed);
     playingForUi.store (playing, std::memory_order_relaxed);
+}
+
+//==============================================================================
+MidiClip makeClip (const juce::MidiMessageSequence& seq, double transportRate)
+{
+    MidiClip clip;
+    clip.reserve ((size_t) seq.getNumEvents());
+    for (const auto* e : seq)
+        clip.push_back ({ (juce::int64) std::llround (e->message.getTimeStamp() * transportRate), e->message });
+    std::stable_sort (clip.begin(), clip.end(), [] (const ClipEvent& a, const ClipEvent& b) { return a.position < b.position; });
+    return clip;
+}
+
+ClipPlayerProcessor::ClipPlayerProcessor (juce::String n) : EngineProcessorBase (stereoOutOnly()), name (std::move (n))
+{
+    ownedClips.reserve (8);
+    ownedInstruments.reserve (8);
+}
+
+bool ClipPlayerProcessor::setClip (std::shared_ptr<const MidiClip> c)
+{
+    collectGarbage();
+    if (! commands.push ({ Command::Type::setClip, c.get(), nullptr, 0 }))
+        return false;
+    if (c != nullptr)
+        ownedClips.push_back (std::move (c));
+    return true;
+}
+
+bool ClipPlayerProcessor::setInstrument (std::shared_ptr<synth::Instrument> i)
+{
+    collectGarbage();
+    if (! commands.push ({ Command::Type::setInstrument, nullptr, i.get(), 0 }))
+        return false;
+    if (i != nullptr)
+        ownedInstruments.push_back (std::move (i));
+    return true;
+}
+
+bool ClipPlayerProcessor::play() { return commands.push ({ Command::Type::play, nullptr, nullptr, 0 }); }
+bool ClipPlayerProcessor::stop() { return commands.push ({ Command::Type::stop, nullptr, nullptr, 0 }); }
+bool ClipPlayerProcessor::seek (juce::int64 pos) { return commands.push ({ Command::Type::seek, nullptr, nullptr, pos }); }
+bool ClipPlayerProcessor::setLength (juce::int64 len) { return commands.push ({ Command::Type::setLength, nullptr, nullptr, len }); }
+
+void ClipPlayerProcessor::collectGarbage()
+{
+    Retired r;
+    while (retired.pop (r))
+    {
+        if (r.clip != nullptr)
+            if (auto it = std::find_if (ownedClips.begin(), ownedClips.end(), [&] (const auto& p) { return p.get() == r.clip; }); it != ownedClips.end())
+                ownedClips.erase (it);
+        if (r.instrument != nullptr)
+            if (auto it = std::find_if (ownedInstruments.begin(), ownedInstruments.end(), [&] (const auto& p) { return p.get() == r.instrument; }); it != ownedInstruments.end())
+                ownedInstruments.erase (it);
+    }
+}
+
+void ClipPlayerProcessor::prepareToPlay (double sampleRate, int maxBlockSize)
+{
+    // the audio callback is stopped while the graph prepares: safe to (re)prepare every instrument
+    for (auto& i : ownedInstruments)
+        i->prepare (sampleRate, maxBlockSize);
+    blockMidi.ensureSize (4096);
+}
+
+void ClipPlayerProcessor::relocate() noexcept
+{
+    cursor = 0;
+    if (clip == nullptr)
+        return;
+    const auto it = std::lower_bound (clip->begin(), clip->end(), readPosition,
+                                      [] (const ClipEvent& e, juce::int64 p) { return e.position < p; });
+    cursor = (size_t) (it - clip->begin());
+}
+
+void ClipPlayerProcessor::handleCommands() noexcept
+{
+    Command cmd;
+    while (commands.pop (cmd))
+    {
+        switch (cmd.type)
+        {
+            case Command::Type::setClip:
+                if (instrument != nullptr)
+                    instrument->allNotesOff();
+                if (clip != nullptr)
+                    retired.push ({ clip, nullptr });
+                clip = cmd.clip;
+                relocate();
+                break;
+            case Command::Type::setInstrument:
+                if (instrument != nullptr)
+                    retired.push ({ nullptr, instrument });
+                instrument = cmd.instrument;
+                break;
+            case Command::Type::play:
+                playing = true;
+                break;
+            case Command::Type::stop:
+                playing = false;
+                if (instrument != nullptr)
+                    instrument->allNotesOff();
+                break;
+            case Command::Type::seek:
+                readPosition = std::max<juce::int64> (0, cmd.position);
+                relocate();
+                if (instrument != nullptr)
+                    instrument->allNotesOff();
+                break;
+            case Command::Type::setLength: // a new source: like the SourcePlayer, back to the start, stopped
+                length = cmd.position;
+                readPosition = 0;
+                relocate();
+                playing = false;
+                if (instrument != nullptr)
+                    instrument->allNotesOff();
+                break;
+        }
+    }
+}
+
+void ClipPlayerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+{
+    handleCommands();
+    // the SourcePlayer's arithmetic: play up to the source's end, then stop on the same sample
+    const int n = playing && length >= 0 ? (int) std::clamp<juce::int64> (length - readPosition, 0, buffer.getNumSamples())
+                                         : buffer.getNumSamples();
+    blockMidi.clear();
+    if (playing && clip != nullptr)
+    {
+        const juce::int64 end = readPosition + n;
+        while (cursor < clip->size() && (*clip)[cursor].position < end)
+        {
+            const auto& e = (*clip)[cursor++];
+            blockMidi.addEvent (e.message, (int) std::max<juce::int64> (0, e.position - readPosition)); // fits the reserved space
+        }
+    }
+    if (instrument != nullptr)
+        instrument->process (buffer, blockMidi); // also renders release tails while stopped
+    else
+        buffer.clear();
+    if (playing)
+    {
+        readPosition += n;
+        if (length >= 0 && readPosition >= length)
+        {
+            playing = false;
+            if (instrument != nullptr)
+                instrument->allNotesOff();
+        }
+    }
 }
 
 //==============================================================================

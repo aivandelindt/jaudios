@@ -1,0 +1,8 @@
+// name: Electric keys
+// category: keys
+// JAUDIOS preset: synthesised (sfizz oscillators), no samples. Bell-like tine over a sine body.
+<global>
+amp_veltrack=75 ampeg_attack=0.003 ampeg_decay=3.5 ampeg_sustain=25 ampeg_release=0.5
+<region> sample=*sine volume=-6
+<region> sample=*sine transpose=24 volume=-18 ampeg_decay=0.25 ampeg_sustain=0
+<region> sample=*triangle transpose=12 volume=-20 ampeg_decay=0.8 ampeg_sustain=10

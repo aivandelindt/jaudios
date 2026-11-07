@@ -70,6 +70,30 @@ endfunction()
 jaudios_embed_patterns(${CMAKE_CURRENT_LIST_DIR}/generators/patterns embeddedBassPatterns ${CMAKE_CURRENT_BINARY_DIR}/BassPatternsEmbedded.cpp)
 jaudios_embed_patterns(${CMAKE_CURRENT_LIST_DIR}/generators/drums embeddedDrumPatterns ${CMAKE_CURRENT_BINARY_DIR}/DrumPatternsEmbedded.cpp)
 
+# synth-and-vst3-host: built-in SFZ presets (engine/synth/presets/*.sfz), id = file name.
+file(GLOB _sfz_presets CONFIGURE_DEPENDS ${CMAKE_CURRENT_LIST_DIR}/synth/presets/*.sfz)
+list(SORT _sfz_presets)
+set(_ids "")
+set(_texts "")
+set(_n 0)
+foreach(_f ${_sfz_presets})
+    get_filename_component(_id ${_f} NAME_WE)
+    file(READ ${_f} _sfz)
+    string(APPEND _ids "\"${_id}\",\n")
+    string(APPEND _texts "R\"JAUDIOSSFZ(${_sfz})JAUDIOSSFZ\",\n")
+    math(EXPR _n "${_n} + 1")
+endforeach()
+file(CONFIGURE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/SfzPresetsEmbedded.cpp CONTENT
+"// Generated from engine/synth/presets/*.sfz by engine/CMakeLists.txt. Do not edit.
+namespace jaudios::synth {
+extern const char* const embeddedSfzPresetIds[] = {
+${_ids}};
+extern const char* const embeddedSfzPresets[] = {
+${_texts}};
+extern const int numEmbeddedSfzPresets = ${_n};
+}
+" @ONLY)
+
 jaudios_engine_lib(engine_generators
     SOURCES ${CMAKE_CURRENT_LIST_DIR}/generators/ChordEngine.cpp
             ${CMAKE_CURRENT_LIST_DIR}/generators/BassGenerator.cpp
@@ -77,6 +101,11 @@ jaudios_engine_lib(engine_generators
             ${CMAKE_CURRENT_BINARY_DIR}/BassPatternsEmbedded.cpp
             ${CMAKE_CURRENT_BINARY_DIR}/DrumPatternsEmbedded.cpp
     DEPS engine_theory jaudios_juce)
-jaudios_engine_lib(engine_synth SOURCES ${CMAKE_CURRENT_LIST_DIR}/synth/DrumSampler.cpp DEPS engine_generators jaudios_juce)
+jaudios_engine_lib(engine_synth
+    SOURCES ${CMAKE_CURRENT_LIST_DIR}/synth/DrumSampler.cpp
+            ${CMAKE_CURRENT_LIST_DIR}/synth/SfzInstrument.cpp
+            ${CMAKE_CURRENT_BINARY_DIR}/SfzPresetsEmbedded.cpp
+    DEPS engine_generators jaudios_juce)
+target_link_libraries(engine_synth PRIVATE sfizz::sfizz)
 jaudios_engine_lib(engine_fx         DEPS jaudios_juce)
 jaudios_engine_lib(engine_export     DEPS jaudios_juce)
