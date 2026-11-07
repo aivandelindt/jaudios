@@ -111,3 +111,116 @@ TEST_CASE ("Skill acceptance: C major fixture -> top-1 uses I / IV / V / vi only
     CHECK (top.maxVoiceLeading <= 6);
     CHECK (r.progressions.size() == 8);
 }
+
+//==============================================================================
+// bass-generator on the same pipeline: acceptance on real analysis output + kick detection vs
+// the fixture renderer's kick positions.
+#include "engine/analysis/tempo/KickDetector.h"
+#include "engine/generators/BassGenerator.h"
+
+namespace
+{
+std::vector<float> monoOf (const juce::String& name)
+{
+    const analysis::AudioImporter importer;
+    const auto imported = importer.importFile (fixture (name, ".wav"));
+    REQUIRE (imported.ok());
+    const auto& b = imported.capture->buffer;
+    std::vector<float> m ((size_t) b.getNumSamples(), 0.0f);
+    for (int ch = 0; ch < b.getNumChannels(); ++ch)
+        for (int i = 0; i < b.getNumSamples(); ++i)
+            m[(size_t) i] += b.getSample (ch, i) / (float) b.getNumChannels();
+    return m;
+}
+} // namespace
+
+TEST_CASE ("Bass on the fixtures: every note a chord or scale tone, root on each downbeat", "[bass][golden][acceptance]")
+{
+    REQUIRE_MODEL();
+    const juce::String name = GENERATE (as<juce::String>{}, "pop_100_Cmaj", "house_124_Amin", "techno_132_Fmin", "loop_8bar_Gmaj");
+    const auto r = run (name);
+    gen::BassInput in;
+    in.key = r.source.key;
+    for (const auto& b : r.source.bars)
+        in.bars.push_back ({ b.startSec, b.endSec });
+    in.progression = r.progressions.front();
+    const auto scale = theory::scalePitchClasses (in.key);
+    for (const auto& pattern : gen::builtinBassPatterns())
+    {
+        const auto notes = gen::generateBass (in, pattern);
+        INFO (name << " / " << pattern.name);
+        REQUIRE_FALSE (notes.empty());
+        for (const auto& n : notes)
+        {
+            const auto& chord = in.progression.chords[(size_t) n.slot];
+            const bool ok = chord.contains (n.pitch % 12) || std::find (scale.begin(), scale.end(), n.pitch % 12) != scale.end();
+            CHECK (ok);
+            for (const auto& s : in.progression.slots)
+                if (std::abs (n.startSec - s.startSec) < 1e-6)
+                    CHECK (n.pitch % 12 == chord.root);
+        }
+    }
+}
+
+TEST_CASE ("Kick detection on the fixture mixes vs the rendered kicks", "[bass][kicks][golden]")
+{
+    const juce::String name = GENERATE (as<juce::String>{}, "house_124_Amin", "techno_132_Fmin", "pop_100_Cmaj", "loop_8bar_Gmaj");
+    const auto truth = juce::JSON::parse (fixture (name, ".truth.json"));
+    const double beat = 60.0 / (double) truth["bpm"], t0 = truth["first_downbeat_sec"];
+    const int beats = 4 * (int) truth["bars"];
+    std::vector<double> expected;
+    for (int b = 0; b < beats; ++b)
+        if (name != "pop_100_Cmaj" || b % 2 == 0) // pop: kick on 1 and 3 (FixtureRender)
+            expected.push_back (t0 + b * beat);
+
+    const auto mono = monoOf (name);
+    const auto kicks = analysis::detectKicks (mono.data(), (int) mono.size(), 44100.0);
+    int hit = 0;
+    for (double e : expected)
+        hit += std::any_of (kicks.begin(), kicks.end(), [&] (double k) { return std::abs (k - e) < 0.03; }) ? 1 : 0;
+    const double recall = (double) hit / (double) expected.size(), precision = kicks.empty() ? 0.0 : (double) hit / (double) kicks.size();
+    WARN (name << " (mix): " << kicks.size() << " kicks, " << expected.size() << " rendered; recall " << recall << ", precision " << precision);
+    CHECK (recall >= 0.95);
+    // On a mix, bass attacks between the kicks share the kick band (techno: rolling 16ths; pop: bass on
+    // every beat, kick on 1 and 3), so precision is gated only where the bass plays with the kicks.
+    // The bass generator takes kicks from the drums stem for that reason (next test).
+    if (name == "house_124_Amin" || name == "loop_8bar_Gmaj")
+        CHECK (precision >= 0.9);
+}
+
+#include "engine/analysis/stems/StemSeparator.h"
+
+TEST_CASE ("Kick detection on the drums stem (HT-Demucs) of the pop fixture", "[bass][kicks][golden][stems]")
+{
+    const auto model = juce::File (JAUDIOS_DEV_MODELS_DIR).getChildFile ("htdemucs.onnx");
+    if (! model.existsAsFile())
+        SKIP ("no stem model: python3 tools/models.py --only demucs --python <env>");
+    const analysis::AudioImporter importer;
+    auto imported = importer.importFile (fixture ("pop_100_Cmaj", ".wav"));
+    REQUIRE (imported.ok());
+    auto mix = imported.capture->buffer;
+    mix.setSize (mix.getNumChannels(), 16 * 44100, true, false, false); // first 16 s: 3 segments
+
+    analysis::stems::StemSeparator sep ({ model });
+    REQUIRE (sep.isReady());
+    const auto r = sep.separate (mix, 44100.0);
+    REQUIRE (r.stems);
+    const auto& drumsStem = (*r.stems)[analysis::stems::Stem::drums];
+    std::vector<float> mono ((size_t) drumsStem.getNumSamples(), 0.0f);
+    for (int ch = 0; ch < drumsStem.getNumChannels(); ++ch)
+        for (int i = 0; i < drumsStem.getNumSamples(); ++i)
+            mono[(size_t) i] += 0.5f * drumsStem.getSample (ch, i);
+    const auto kicks = analysis::detectKicks (mono.data(), (int) mono.size(), 44100.0);
+
+    const double beat = 0.6; // 100 BPM, kick on beats 1 and 3
+    std::vector<double> expected;
+    for (double t = 0.0; t < 16.0 - 0.1; t += 2 * beat)
+        expected.push_back (t);
+    int hit = 0;
+    for (double e : expected)
+        hit += std::any_of (kicks.begin(), kicks.end(), [&] (double k) { return std::abs (k - e) < 0.03; }) ? 1 : 0;
+    const double recall = (double) hit / (double) expected.size(), precision = kicks.empty() ? 0.0 : (double) hit / (double) kicks.size();
+    WARN ("pop_100_Cmaj drums stem: " << kicks.size() << " kicks, " << expected.size() << " rendered; recall " << recall << ", precision " << precision);
+    CHECK (recall >= 0.9);
+    CHECK (precision >= 0.9);
+}

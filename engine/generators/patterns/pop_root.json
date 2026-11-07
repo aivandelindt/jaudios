@@ -1,0 +1,6 @@
+{ "name": "pop_root", "style": "pop", "grid": 8, "bars": 1,
+  "description": "Root on 1, held; pickup on the and of 4 leads into the next chord",
+  "steps": [
+    { "step": 0, "length": 6, "velocity": 110, "gate": 0.95, "role": "root" },
+    { "step": 6, "length": 1, "velocity": 90, "role": "fifth" },
+    { "step": 7, "length": 1, "velocity": 96, "role": "approach" } ] }

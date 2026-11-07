@@ -1,0 +1,7 @@
+{ "name": "walking", "style": "lofi", "grid": 8, "bars": 1, "swing": 0.2,
+  "description": "Walking quarters: root, chord tone, passing tone, approach into the next chord",
+  "steps": [
+    { "step": 0, "length": 2, "velocity": 108, "gate": 0.9, "role": "root" },
+    { "step": 2, "length": 2, "velocity": 96, "gate": 0.9, "role": "chord" },
+    { "step": 4, "length": 2, "velocity": 100, "gate": 0.9, "role": "scale" },
+    { "step": 6, "length": 2, "velocity": 98, "gate": 0.9, "role": "approach" } ] }

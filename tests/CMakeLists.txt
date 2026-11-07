@@ -63,6 +63,12 @@ if(JAUDIOS_WITH_ONNXRUNTIME)
     jaudios_copy_onnxruntime(jaudios_stems_tests)
 endif()
 
+# bass-generator: pattern JSON against patterns/schema.json (stdlib validator)
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME bass_patterns_schema COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/validate_patterns.py)
+endif()
+
 # Chord engine on the fixtures vs their truth chords (needs build/models/basic_pitch.onnx).
 add_executable(jaudios_chords_tests TestMain.cpp golden/test_chords_golden.cpp)
 target_link_libraries(jaudios_chords_tests PRIVATE Catch2::Catch2 app_core test_support jaudios_warnings)
