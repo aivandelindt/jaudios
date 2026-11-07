@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### VST3 hosting (M7b, synth-and-vst3-host)
+- JUCE's VST3 host on (`JUCE_PLUGINHOST_VST3`; the VST3 SDK 3.8.0 inside JUCE is MIT). No new dependency.
+- Out-of-process scanning: `jaudios-plugin-scanner <plugin> <out.xml>` scans one file. `PluginHost::scan()` runs it per file with a
+  timeout, so a plugin that crashes or hangs only fails its own entry. The known list persists as XML
+  (`~/Library/Application Support/JAudios/plugins.xml`, `JAUDIOS_PLUGIN_LIST`).
+- `PluginInstrument`: a hosted plugin as a channel instrument.
+  - Stereo out, inputs disabled, MIDI through a buffer reserved in prepare. The wrapper allocates nothing on the audio thread
+    (`[rt]` test).
+  - All-notes-off via an atomic flag; parameters by name or ID; state get / set.
+  - It keeps the description it was created from: a live VST3 reports its inner binary, which the format can't reopen.
+- `InstrumentSlot` / `ProjectInstruments`: a project file (`{"version":1,"slots":{...}}`) keeps each channel's instrument. That is a
+  built-in preset, an SFZ file, the drum kit, or a plugin with its base64 state.
+- `app-cli plugins scan [--path DIR]... | list`. `app-cli audition` gains `--chords-plugin` / `--bass-plugin`, `--chords-param` /
+  `--bass-param NAME=0..1`, `--project`, `--save-project` and `--plugin-list`. A restored project renders bit-identically.
+- An in-repo test instrument (`tests/plugins/TestSynth`, JUCE, sine voices; Gain and Octave params; never shipped). Tests cover:
+  - the scan, including a broken `.vst3`, and list persistence;
+  - pitch, and a parameter change being heard;
+  - the state round trip through a project file in a fresh host;
+  - playback on the chords channel in the engine graph.
+
+  macOS CI scans it, auditions with it, and restores it in a second process.
+- Fix: macOS arm64 builds of sfizz no longer get 32-bit ARM flags (`-mfpu=neon`, rejected by clang).
+
 ### Built-in instruments + generated channels in the engine (M7a, synth-and-vst3-host)
 - sfizz 1.2.3 (BSD-2, stack table; approved) via FetchContent, static, apps/tests off. It builds as C++17 inside its own scope (GCC rejects
   its hex-float literals under its default C++14; C++20 turns its `u8""` literals into `char8_t`); our targets stay C++20.

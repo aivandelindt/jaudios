@@ -19,10 +19,12 @@ command -v ninja >/dev/null && GEN=(-G Ninja)
 
 cmake -S "$ROOT" -B "$BUILD" "${GEN[@]}" -DCMAKE_BUILD_TYPE=RelWithDebInfo \
       -DJAUDIOS_RT_CHECK=ON -DJAUDIOS_BUILD_APP=OFF >/dev/null
-cmake --build "$BUILD" --target jaudios_rt_tests app-cli-rt
+cmake --build "$BUILD" --target jaudios_rt_tests jaudios_plugin_rt_tests app-cli-rt
 
 echo "== [rt] unit tests (instrumented) =="
 "$BUILD/tests/jaudios_rt_tests" "[rt]" --success --reporter compact
+echo "== [rt] VST3 hosting wrapper around the in-repo test plugin (instrumented) =="
+"$BUILD/tests/jaudios_plugin_rt_tests" "[rt]" --success --reporter compact
 
 FILE="${1:-$ROOT/tests/fixtures/house_124_Amin.wav}"
 if [[ -f "$FILE" ]]; then

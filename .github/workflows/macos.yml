@@ -206,8 +206,24 @@ jobs:
         run: |
           CLI=build/tools/cli/app-cli_artefacts/Release/app-cli
           "$CLI" audition --list-presets | python3 -c "import json,sys; print([(c['category'], [p['id'] for p in c['presets']]) for c in json.load(sys.stdin)['categories']])"
-          "$CLI" audition tests/fixtures/house_124_Amin.wav --style house --out "$RUNNER_TEMP/house.audition.wav" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['progression'], d['chords_preset'], d['bass_preset'], d['drums'], d['notes'], 'x%.0f realtime' % d['realtime_factor'], 'peak %.2f' % d['peak']); sys.exit(0 if 0.05 < d['peak'] < 1.0 else 1)"
+          "$CLI" audition tests/fixtures/house_124_Amin.wav --style house --out "$RUNNER_TEMP/house.audition.wav" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['progression'], d['chords_instrument']['name'], d['bass_instrument']['name'], d['drums'], d['notes'], 'x%.0f realtime' % d['realtime_factor'], 'peak %.2f' % d['peak']); sys.exit(0 if 0.05 < d['peak'] < 1.0 else 1)"
           "$CLI" audition tests/fixtures/house_124_Amin.wav --bypass --out "$RUNNER_TEMP/house.bypass.wav" | python3 -c "import json,sys; d=json.load(sys.stdin); print('bypass peak %.3f' % d['peak']); sys.exit(0 if d['peak'] < 0.5 else 1)"
+
+      - name: VST3 hosting (out-of-process scan, the test plugin on the chords channel, project persistence)
+        run: |
+          CLI=build/tools/cli/app-cli_artefacts/Release/app-cli
+          LIST="$RUNNER_TEMP/plugins.xml"
+          PLUGDIR="build/tests/plugins/TestSynth/JAudiosTestSynth_artefacts/Release/VST3"
+          "$CLI" plugins scan --path "$PLUGDIR" --plugin-list "$LIST" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['found'], d['failed'], '%.0f ms' % d['scan_ms']); sys.exit(0 if len(d['found']) == 1 and d['found'][0]['instrument'] else 1)"
+          "$CLI" plugins list --plugin-list "$LIST"
+          # run 1: the plugin plays the chords with octave -1, gain 0.4; the project file keeps it
+          "$CLI" audition tests/fixtures/house_124_Amin.wav --chords-plugin "JAudios Test Synth" --chords-param Octave=0.25 --chords-param Gain=0.4 \
+              --plugin-list "$LIST" --save-project "$RUNNER_TEMP/song.json" --out "$RUNNER_TEMP/plugin1.wav" \
+            | python3 -c "import json,sys; d=json.load(sys.stdin); c=d['chords_instrument']; print(c); sys.exit(0 if c['parameters']['Octave'] == '-1' and 0.05 < d['peak'] < 1.0 else 1)"
+          # run 2 (a new process = a restart): everything comes back from the project file
+          "$CLI" audition tests/fixtures/house_124_Amin.wav --project "$RUNNER_TEMP/song.json" --plugin-list "$LIST" --out "$RUNNER_TEMP/plugin2.wav" \
+            | python3 -c "import json,sys; d=json.load(sys.stdin); c=d['chords_instrument']; print(c); sys.exit(0 if c['parameters'] == {'Gain': '0.40', 'Octave': '-1', 'Bypass': 'Off'} else 1)"
+          cmp "$RUNNER_TEMP/plugin1.wav" "$RUNNER_TEMP/plugin2.wav" && echo "restored render is bit-identical"
 
       - name: Stem separation with the CoreML execution provider (diagnostic)
         continue-on-error: true

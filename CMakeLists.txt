@@ -35,6 +35,7 @@ add_subdirectory(engine)
 add_subdirectory(app)
 add_subdirectory(tools/cli)
 add_subdirectory(tools/fixtures)
+add_subdirectory(tools/plugin-scanner)
 
 if(JAUDIOS_BUILD_TESTS)
     enable_testing()

@@ -39,6 +39,9 @@ public:
     bool load (const SfzPreset&);
     bool loadFile (const juce::File& sfzFile);
     int numRegions() const noexcept;
+    /** What was loaded: a built-in preset id, or the SFZ file (for project files). */
+    const std::string& presetId() const noexcept { return loadedPreset; }
+    const juce::File& sfzFile() const noexcept { return loadedFile; }
 
     juce::String name() const override { return displayName; }
     void prepare (double sampleRate, int maxBlockSize) override;
@@ -48,6 +51,8 @@ public:
 private:
     std::unique_ptr<sfz::Sfizz> synth;
     juce::String displayName;
+    std::string loadedPreset;
+    juce::File loadedFile;
 };
 
 /** The drum sampler as an Instrument (drums channel). The kit is (re)built by `makeKit` for the

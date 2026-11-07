@@ -65,6 +65,8 @@ SfzInstrument::~SfzInstrument() = default;
 bool SfzInstrument::load (const SfzPreset& p)
 {
     displayName = p.name.empty() ? juce::String (p.id) : juce::String (p.name);
+    loadedPreset = p.id;
+    loadedFile = juce::File();
     // a virtual path: the presets reference no files (oscillators only)
     return synth->loadSfzString ("/jaudios/presets/" + p.id + ".sfz", p.sfz) && synth->getNumRegions() > 0;
 }
@@ -72,6 +74,8 @@ bool SfzInstrument::load (const SfzPreset& p)
 bool SfzInstrument::loadFile (const juce::File& f)
 {
     displayName = f.getFileNameWithoutExtension();
+    loadedPreset.clear();
+    loadedFile = f;
     return synth->loadSfzFile (f.getFullPathName().toStdString()) && synth->getNumRegions() > 0;
 }
 

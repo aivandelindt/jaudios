@@ -33,8 +33,9 @@ target_compile_definitions(jaudios_juce
         # MP3/M4A: CoreAudioFormat on macOS. JUCE's software MP3 decoder stays off (see the
         # JUCE_USE_MP3AUDIOFORMAT legal disclaimer in juce_audio_formats.h).
         JUCE_USE_MP3AUDIOFORMAT=0
-        # VST3 hosting is a later milestone (synth-and-vst3-host).
-        JUCE_PLUGINHOST_VST3=0
+        # synth-and-vst3-host: VST3 instruments on the generated channels (JUCE's bundled VST3 SDK
+        # 3.8.0, MIT). AU / LV2 / LADSPA stay off.
+        JUCE_PLUGINHOST_VST3=1
         JUCE_PLUGINHOST_AU=0
         JUCE_PLUGINHOST_LADSPA=0
         JUCE_PLUGINHOST_LV2=0
