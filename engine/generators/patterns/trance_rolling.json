@@ -1,0 +1,7 @@
+{ "name": "trance_rolling", "style": "trance", "grid": 16, "bars": 1,
+  "description": "Offbeat trance gallop: 16ths on e-and-a, root throughout",
+  "steps": [
+    { "step": 1, "velocity": 92, "gate": 0.5, "role": "root" }, { "step": 2, "velocity": 110, "gate": 0.5, "role": "root" }, { "step": 3, "velocity": 96, "gate": 0.5, "role": "root" },
+    { "step": 5, "velocity": 92, "gate": 0.5, "role": "root" }, { "step": 6, "velocity": 110, "gate": 0.5, "role": "root" }, { "step": 7, "velocity": 96, "gate": 0.5, "role": "root" },
+    { "step": 9, "velocity": 92, "gate": 0.5, "role": "root" }, { "step": 10, "velocity": 110, "gate": 0.5, "role": "root" }, { "step": 11, "velocity": 96, "gate": 0.5, "role": "root" },
+    { "step": 13, "velocity": 92, "gate": 0.5, "role": "root" }, { "step": 14, "velocity": 110, "gate": 0.5, "role": "root" }, { "step": 15, "velocity": 96, "gate": 0.5, "role": "approach" } ] }

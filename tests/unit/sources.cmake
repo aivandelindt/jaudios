@@ -22,4 +22,6 @@ set(JAUDIOS_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/test_transcription.cpp
     # chord-engine
     ${CMAKE_CURRENT_LIST_DIR}/test_chord_theory.cpp
-    ${CMAKE_CURRENT_LIST_DIR}/test_chord_engine.cpp)
+    ${CMAKE_CURRENT_LIST_DIR}/test_chord_engine.cpp
+    # bass-generator
+    ${CMAKE_CURRENT_LIST_DIR}/test_bass_generator.cpp)

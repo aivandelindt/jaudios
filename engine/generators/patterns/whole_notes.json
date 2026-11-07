@@ -1,0 +1,6 @@
+{ "name": "whole_notes", "style": "cinematic", "grid": 8, "bars": 2,
+  "description": "Long roots, a fifth in the second bar for motion",
+  "steps": [
+    { "step": 0, "length": 8, "velocity": 100, "gate": 1.0, "role": "root" },
+    { "step": 8, "length": 4, "velocity": 96, "gate": 1.0, "role": "root" },
+    { "step": 12, "length": 4, "velocity": 92, "gate": 1.0, "role": "fifth" } ] }

@@ -1,0 +1,7 @@
+{ "name": "house_offbeat", "style": "house", "grid": 16, "bars": 1,
+  "description": "Offbeat house: on the and of every beat, out of the kick's way",
+  "steps": [
+    { "step": 2, "length": 2, "velocity": 110, "gate": 0.8, "role": "root" },
+    { "step": 6, "length": 2, "velocity": 104, "gate": 0.8, "role": "root" },
+    { "step": 10, "length": 2, "velocity": 108, "gate": 0.8, "role": "octave" },
+    { "step": 14, "length": 2, "velocity": 100, "gate": 0.8, "role": "fifth" } ] }
