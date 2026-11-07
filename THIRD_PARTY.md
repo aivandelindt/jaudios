@@ -5,7 +5,7 @@
 | JUCE                 | 8.0.15 (FetchContent, pinned tag) | AGPL/Commercial → **commercial license required before release** (tracked in #TBD) | Raw Material Software | App framework |
 | Catch2               | v3.9.1 (FetchContent, pinned tag) | BSL-1.0 | Catch2 authors | Unit tests only, never shipped |
 | ONNX Runtime         | 1.19.2 — official prebuilt binaries from the `Microsoft.ML.OnnxRuntime` NuGet package (cmake/OnnxRuntime.cmake, sha256 fa133c8f…) | MIT | Microsoft Corporation | Phase B key model inference (CPU; CoreML EP on macOS). Linked dynamically; package ThirdPartyNotices.txt to be shipped with the app |
-| Demucs (htdemucs)    | v4 weights                  | MIT        | Meta Platforms, Inc.                    | Stem separation             |
+| Demucs (htdemucs)    | demucs 4.1.0, checkpoint `955717e8-8726e21a.th` (sha256 8726e21a…, models/manifest.json) | MIT | Meta Platforms, Inc. | Stem separation. Weights exported to ONNX on the user's machine (ml/export_demucs.py), never bundled (174 MB); STFT/ISTFT and segmenting re-implemented in C++ from demucs 4.1.0 |
 | Basic Pitch          | ICASSP 2022 model           | Apache-2.0 | Spotify AB                              | Note transcription          |
 | OpenKeyScan analyzer | commit 6a2915f4 (models/manifest.json; no upstream tags) | MIT | Alexander Sommer (rekordcloud) | Key detection (model + Phase A sidecar). Built from source, not vendored; clone lives in ml/third_party/ (gitignored) |
 | MusicalKeyCNN        | upstream of OpenKeyScan     | MIT        | a1ex90                                  | Model architecture / training code lineage |
@@ -18,6 +18,9 @@
 | onnxsim | 0.6.5 | Apache-2.0 | graph simplification after export (approved 2026-11-04). Segfaults on macOS arm64; the export then uses the raw graph (numerically identical for this model) |
 | onnxruntime (Python) | 1.19.2 | MIT | PyTorch-vs-ORT parity check |
 | PyTorch / librosa / NumPy | see sidecar pins | BSD-3 / ISC / BSD-3 | export + reference CQT (`ml/tests/cqt_reference.py`) |
+| demucs (Python) | 4.1.0 | MIT | loads htdemucs for the ONNX export + parity reference (`ml/export_demucs.py`); the stack table's HT-Demucs |
+| einops / julius / PyYAML | 0.8.1 / 0.2.7 / 6.0.2 | MIT / MIT / MIT | import-time dependencies of demucs 4.1.0 (installed with `--no-deps` alongside it) |
+| soundfile | 0.13.1 | BSD-3 | reads fixtures for the Demucs parity check (already a sidecar pin) |
 
 ### Ported code
 | Component | Version | License | Used for |

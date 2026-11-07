@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Stem separation (M2)
+- `ml/export_demucs.py`: exports the network core of upstream HT-Demucs (demucs 4.1.0, `htdemucs`, MIT) to ONNX
+  (opset 17, static 7.8 s segment: `mix` (1,2,343980) + `spec` (1,4,2048,336) -> `spec_out` (1,4,4,2048,336) +
+  `wave_out` (1,4,2,343980)). The complex STFT/ISTFT stay outside the graph (ONNX has no complex tensors); the
+  wrapper swaps upstream's four complex helpers and runs upstream `forward()` unchanged, so the architecture is
+  not re-implemented. Traced with grad enabled so `nn.MultiheadAttention` avoids its non-exportable fused path.
+- Parity vs upstream PyTorch forward on house/pop/techno segments: max |d| 4.8e-04 (threshold 1e-3), SNR >= 83 dB.
+  ORT CPU: ~2.3 s per segment on 4 x86-64 vCPUs. Writes `htdemucs.onnx.provenance.json`; `tools/models.py
+  --only demucs [--python ...]` exports / verifies it (same acceptance rule as the key model).
+
 ### macOS (Apple Silicon)
 - Fix: on macOS the ONNX Runtime dylib was staged as `libonnxruntime.dylib`, but its install name is
   `@rpath/libonnxruntime.1.19.2.dylib`, so every binary using it would have failed to launch ("Library not
