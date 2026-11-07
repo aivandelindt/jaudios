@@ -19,4 +19,5 @@ every test and the CLI use it instead.
 | techno_132_Fmin | 32 bars, 0.35 s pre-roll, 16th hats, rolling bass, pad: Fm Fm Bbm Fm |
 | pop_100_Cmaj | 24 bars, kick 1+3, snare 2+4, chords + arpeggio: C G Am F |
 | loop_8bar_Gmaj | 8 bars (16.5 s), G C Em D |
-| stem_bass_Dmin | 16 bars bass only @ 96 BPM: Dm Bb F C |
+| stem_bass_Dmin | 16 bars bass only @ 96 BPM: Dm Bb F C (truth includes every note) |
+| melody_mono_Emin | 16 bars, 0.25 s pre-roll, monophonic sung-style line (harmonics, delayed vibrato) over Em C Am Bm @ 110 BPM, E3..E5; truth lists every note (audio-to-midi F1) |

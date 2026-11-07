@@ -21,4 +21,7 @@ set(ENGINE_ANALYSIS_SOURCES
     # stem-separation (HT-Demucs via ONNX Runtime)
     ${CMAKE_CURRENT_LIST_DIR}/stems/DemucsSpec.cpp
     ${CMAKE_CURRENT_LIST_DIR}/stems/StemSeparator.cpp
-    ${CMAKE_CURRENT_LIST_DIR}/stems/StemCache.cpp)
+    ${CMAKE_CURRENT_LIST_DIR}/stems/StemCache.cpp
+    # audio-to-midi (Basic Pitch via ONNX Runtime)
+    ${CMAKE_CURRENT_LIST_DIR}/transcription/NoteCreation.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/transcription/AudioToMidi.cpp)

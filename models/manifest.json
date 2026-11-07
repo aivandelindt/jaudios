@@ -115,5 +115,36 @@
     "sha256": "6a62f93ce4b6dcee2d0eea47e66341fef9810a2c70645168fe456d4c2f64cdcd",
     "url": null,
     "note": "Network core only: STFT/ISTFT, normalisation and segmenting are done in C++ (engine/stems). sha256 identifies the reference export (Linux x86-64 dev machine); like openkeyscan3, other machines produce other bytes and are accepted via htdemucs.onnx.provenance.json. 174 MB: never bundled, exported or downloaded into the models dir."
+  },
+  "basic_pitch_onnx": {
+    "phase": "M3",
+    "source": {
+      "package": "basic-pitch",
+      "version": "0.4.0",
+      "license": "Apache-2.0",
+      "copyright": "Spotify AB",
+      "repo": "https://github.com/spotify/basic-pitch",
+      "wheel_url": "https://files.pythonhosted.org/packages/99/0e/3a36d22562daeb0ae3c78ac78da3f8dba96543c5576ed57d4acb8ddbab5b/basic_pitch-0.4.0-py2.py3-none-any.whl",
+      "wheel_sha256": "738adb503aae7fdfc7d1e1511aa0ce35052315f260a19531ef4c356708425db0",
+      "wheel_size": 758279,
+      "member": "basic_pitch/saved_models/icassp_2022/nmp.onnx"
+    },
+    "fetch": {
+      "script": "ml/fetch_basic_pitch.py"
+    },
+    "io": "serving_default_input_2:0 float32 (B, 43844, 1) mono 22.05 kHz -> StatefulPartitionedCall:0 contour (B, 172, 264), :1 note (B, 172, 88), :2 onset (B, 172, 88)",
+    "file": "basic_pitch.onnx",
+    "size": 230444,
+    "sha256": "2c3c1d144bfa61ad236e92e169c13535c880469a12a047d4e73451f2c059a0ec",
+    "url": null,
+    "reference_pins": {
+      "basic-pitch": "0.4.0",
+      "mir_eval": "0.8.2",
+      "pretty_midi": "0.2.11.post0",
+      "mido": "1.3.3",
+      "resampy": "0.4.2",
+      "setuptools": "75.8.0"
+    },
+    "note": "Upstream's own ONNX export, used byte-for-byte (no re-export, so the sha256 is reproducible everywhere). The reference pins (installed alongside onnxruntime/librosa from the other entries; basic-pitch with --no-deps, no TensorFlow) are only for ml/tests/basic_pitch_reference.py."
   }
 }

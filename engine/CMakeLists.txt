@@ -42,6 +42,9 @@ target_compile_definitions(engine_analysis PRIVATE
     JAUDIOS_HTDEMUCS_ONNX_SHA256="${_demucs_sha}"
     JAUDIOS_HTDEMUCS_CHECKPOINT_SHA256="${_demucs_ckpt}"
     JAUDIOS_DEMUCS_VERSION="${_demucs_version}")
+# audio-to-midi: basic_pitch.onnx is upstream's file, so only its sha256 is accepted.
+string(JSON _basic_pitch_sha GET "${_manifest}" basic_pitch_onnx sha256)
+target_compile_definitions(engine_analysis PRIVATE JAUDIOS_BASIC_PITCH_ONNX_SHA256="${_basic_pitch_sha}")
 if(JAUDIOS_WITH_ONNXRUNTIME)
     target_link_libraries(engine_analysis PRIVATE onnxruntime::onnxruntime)
     target_compile_definitions(engine_analysis PRIVATE JAUDIOS_HAS_ONNXRUNTIME=1)

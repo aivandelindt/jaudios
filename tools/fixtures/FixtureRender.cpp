@@ -10,6 +10,7 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_core/juce_core.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <iostream>
@@ -21,7 +22,7 @@ namespace
 constexpr double sr = 44100.0;
 constexpr double twoPi = juce::MathConstants<double>::twoPi;
 
-enum class Style { house, techno, pop, loop, bassStem };
+enum class Style { house, techno, pop, loop, bassStem, melody };
 
 struct Spec
 {
@@ -43,6 +44,7 @@ const std::vector<Spec>& specs()
         { "pop_100_Cmaj",    Style::pop,      100.0, 0, false, 24, { 0, 4, 5, 3 }, 0.0 },  // C G Am F
         { "loop_8bar_Gmaj",  Style::loop,     120.0, 7, false, 8,  { 0, 3, 5, 4 }, 0.0 },  // G C Em D
         { "stem_bass_Dmin",  Style::bassStem,  96.0, 2, true,  16, { 0, 5, 2, 6 }, 0.0 },  // Dm Bb F C
+        { "melody_mono_Emin", Style::melody,  110.0, 4, true,  16, { 0, 5, 3, 4 }, 0.25 }, // Em C Am Bm: sung-style line
     };
     return s;
 }
@@ -62,6 +64,73 @@ std::vector<int> triad (const Spec& s, int degree, int baseMidi)
     return { root,
              baseMidi + s.tonic + scaleOffset (s.minor, degree + 2),
              baseMidi + s.tonic + scaleOffset (s.minor, degree + 4) };
+}
+
+/** A note with exact ground truth (written to <name>.truth.json "notes" for transcription tests). */
+struct TruthNote
+{
+    double start, dur;
+    int midi;
+};
+
+/** Monophonic, voice-like line over the progression: chord tones on strong beats, scale steps
+    between, mixed durations (8th .. dotted half) and rests; deterministic. Range E3..E5. */
+std::vector<TruthNote> melodyNotes (const Spec& s)
+{
+    // durations in 8ths per bar (sum 8, a negative value is a rest), cycled
+    static const std::vector<std::vector<int>> rhythms {
+        { 2, 1, 1, 2, 2 }, { 3, 1, 2, -2 }, { 1, 1, 1, 1, 4 }, { 2, 2, 2, 2 },
+        { 6, -2 }, { 1, 1, 2, 1, 1, 2 }, { 2, -1, 1, 4 }, { 4, 2, 2 },
+    };
+    static const int steps[] = { 0, 2, -1, 1, 3, -2, 1, -1, 2, 0, -3, 1 };
+    const double eighth = 30.0 / s.bpm;
+    std::vector<TruthNote> notes;
+    int degree = 7; // scale degree relative to the tonic of the octave starting at E3
+    size_t stepIdx = 0;
+    for (int b = 0; b < s.bars; ++b)
+    {
+        const int chordDegree = s.degrees[(size_t) b % s.degrees.size()];
+        double t = s.firstDownbeatSec + b * 8 * eighth;
+        bool first = true;
+        for (int d : rhythms[(size_t) b % rhythms.size()])
+        {
+            const double len = std::abs (d) * eighth;
+            if (d > 0)
+            {
+                if (first) // land on a chord tone (root / third / fifth) nearest to where the line is
+                {
+                    int best = degree, bestDist = 99;
+                    for (int c = chordDegree; c < chordDegree + 21; c += 2)
+                        if ((c - chordDegree) % 7 == 0 || (c - chordDegree) % 7 == 2 || (c - chordDegree) % 7 == 4)
+                            if (std::abs (c - degree) < bestDist) { bestDist = std::abs (c - degree); best = c; }
+                    degree = best;
+                }
+                else
+                    degree += steps[stepIdx++ % (sizeof (steps) / sizeof (steps[0]))];
+                degree = std::clamp (degree, 0, 14);
+                notes.push_back ({ t, len * 0.92, 52 + s.tonic - 4 + scaleOffset (s.minor, degree) });
+                first = false;
+            }
+            t += len;
+        }
+    }
+    return notes;
+}
+
+/** The bass stem's notes (same pattern as render()). */
+std::vector<TruthNote> bassStemNotes (const Spec& s)
+{
+    std::vector<TruthNote> notes;
+    const double beat = 60.0 / s.bpm;
+    static const int pattern[] = { 0, 2, 4, 1 };
+    for (int b = 0; b < s.bars; ++b)
+    {
+        const int degree = s.degrees[(size_t) b % s.degrees.size()];
+        for (int q = 0; q < 4; ++q)
+            notes.push_back ({ s.firstDownbeatSec + (b * 4 + q) * beat, beat * 0.85,
+                               36 + s.tonic + scaleOffset (s.minor, degree + pattern[q]) });
+    }
+    return notes;
 }
 
 double midiToHz (double m) { return 440.0 * std::pow (2.0, (m - 69.0) / 12.0); }
@@ -109,6 +178,32 @@ struct Renderer
         }
     }
 
+    /** Sung-style tone: harmonics with a vowel-like spectral tilt, delayed vibrato (5.5 Hz, +-25 cents),
+        soft attack. Pitch centre is exactly `midi` (vibrato is symmetric). */
+    void voice (double t0, double dur, double midi, double gain)
+    {
+        const int start = (int) std::lround (t0 * sr);
+        const double release = 0.05;
+        const int len = (int) ((dur + release) * sr);
+        const double f0 = midiToHz (midi);
+        const int maxH = std::max (1, std::min (10, (int) (8000.0 / f0)));
+        double phase = 0.0;
+        for (int n = 0; n < len; ++n)
+        {
+            const double t = n / sr;
+            const double depth = 0.25 * std::min (1.0, std::max (0.0, (t - 0.12) / 0.15)); // semitones
+            const double f = f0 * std::pow (2.0, depth * std::sin (twoPi * 5.5 * t) / 12.0);
+            phase += twoPi * f / sr;
+            double env = std::min (1.0, t / 0.03);
+            if (t > dur)
+                env *= std::exp (-(t - dur) / (release / 4.0));
+            double v = 0.0;
+            for (int h = 1; h <= maxH; ++h)
+                v += std::sin (h * phase) * (h == 1 ? 1.0 : 0.7 / std::pow ((double) h, 1.3)) * (h == 3 || h == 4 ? 1.6 : 1.0);
+            add (start + n, gain * env * v, 0.0);
+        }
+    }
+
     /** Band-limited-ish saw voice (sum of harmonics) with a simple AD envelope. */
     void tone (double t0, double dur, double midi, double gain, int harmonics, double attack, double release,
                double pan = 0.0)
@@ -133,6 +228,13 @@ struct Renderer
 
 void render (const Spec& s, Renderer& r)
 {
+    if (s.style == Style::melody)
+    {
+        for (const auto& n : melodyNotes (s))
+            r.voice (n.start, n.dur, n.midi, 0.25);
+        return;
+    }
+
     const double beat = 60.0 / s.bpm;
     const double bar = 4.0 * beat;
     const double t0 = s.firstDownbeatSec;
@@ -186,6 +288,8 @@ void render (const Spec& s, Renderer& r)
                     r.tone (tb, beat * 0.85, note, 0.30, 10, 0.005, 0.05);
                     break;
                 }
+                case Style::melody: // rendered by its own branch above
+                    break;
             }
         }
 
@@ -211,6 +315,7 @@ void render (const Spec& s, Renderer& r)
                             0.05, 0.3);
                 break;
             case Style::bassStem:
+            case Style::melody:
                 break;
         }
     }
@@ -270,6 +375,20 @@ void writeTruth (const juce::File& file, const Spec& s)
         chords.add (juce::String (pcName (((t[0] % 12) + 12) % 12, minorTriad)) + (dim ? "dim" : minorTriad ? "m" : ""));
     }
     obj->setProperty ("chords_per_bar", chords);
+
+    if (s.style == Style::melody || s.style == Style::bassStem)
+    {
+        juce::Array<juce::var> notes;
+        for (const auto& n : s.style == Style::melody ? melodyNotes (s) : bassStemNotes (s))
+        {
+            auto* o = new juce::DynamicObject();
+            o->setProperty ("onset", n.start);
+            o->setProperty ("offset", n.start + n.dur);
+            o->setProperty ("midi", n.midi);
+            notes.add (juce::var (o));
+        }
+        obj->setProperty ("notes", notes); // exact note truth for transcription (audio-to-midi) tests
+    }
 
     file.replaceWithText (juce::JSON::toString (juce::var (obj.release()), false) + "\n");
 }

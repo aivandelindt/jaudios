@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Audio to MIDI (M3)
+- Model: Basic Pitch (Spotify, Apache-2.0) uses upstream's own `nmp.onnx` from the pinned basic-pitch 0.4.0 wheel,
+  byte-for-byte. `ml/fetch_basic_pitch.py` (stdlib only) checks the wheel's and the model's sha256;
+  `tools/models.py --only basic_pitch`. 230 KB, same bytes on every machine, so the app accepts only the manifest sha256.
+- `engine/analysis/transcription`: `AudioToMidi` reproduces `basic_pitch.inference.run_inference` (mono mean, 22.05 kHz,
+  2 s windows with 30 overlapping frames, batched through ORT CPU, unwrapped and trimmed like upstream). `extractNotes()`
+  ports `output_to_notes_polyphonic` + `get_pitch_bends` (inferred onsets, peak picking, energy tracking, melodia
+  trick) and `frameToSeconds()` ports `model_frames_to_time`, upstream quirks included. Defaults from the skill
+  (frame 0.5, onset 0.5, min 58 ms) in `NoteParams`. Output: notes with per-note confidence and a
+  `juce::MidiMessageSequence` (velocity, pitch bends like `note_events_to_midi`, plus a wheel re-centre after each bent note).
+- Golden vs upstream (`jaudios_transcription_tests`, references from `ml/tests/basic_pitch_reference.py`): posteriors
+  max |d| 1.2e-07 (threshold 1e-4); note creation on upstream's posteriors gives exactly upstream's notes, bends and times
+  for both the skill's and upstream's parameter sets on melody / bass / pop; from the WAV with our resampler, F1 1.0 vs
+  upstream's notes (20 ms).
+- Acceptance (skill: note F1 >= 0.80, 50 ms): 0.992 on the new synthetic sung melody fixture `melody_mono_Emin` (60
+  notes, vibrato). This is a synthetic stand-in, not a real vocal test set. Fixtures: `FixtureRender` adds
+  `melody_mono_Emin` and writes note-level truth (`notes`) for it and for `stem_bass_Dmin`.
+
 ### Stem separation (M2)
 - `ml/export_demucs.py`: exports the network core of upstream HT-Demucs (demucs 4.1.0, `htdemucs`, MIT) to ONNX
   (opset 17, static 7.8 s segment: `mix` (1,2,343980) + `spec` (1,4,2048,336) -> `spec_out` (1,4,4,2048,336) +

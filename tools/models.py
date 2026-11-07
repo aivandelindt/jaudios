@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """`make models`: fetch/verify/unpack model artefacts listed in models/manifest.json. Stdlib only.
 
+basic_pitch.onnx: upstream's file from the pinned wheel, sha256-checked (no export).
 Models (openkeyscan3.onnx, htdemucs.onnx): accepted by manifest sha256, or as a verified local export
 (provenance record next to the file); exported with --python when missing.
 
@@ -125,6 +126,16 @@ def ensure_demucs(manifest, build_dir, python):
     return 1
 
 
+def ensure_basic_pitch(manifest, build_dir):
+    """Audio-to-MIDI model: upstream's own nmp.onnx from the pinned basic-pitch wheel (sha256 both)."""
+    entry = manifest["basic_pitch_onnx"]
+    dest = build_dir / "models" / entry["file"]
+    if not dest.exists() or sha256(dest) != entry["sha256"]:
+        subprocess.check_call([sys.executable, str(ROOT / "ml" / "fetch_basic_pitch.py"), "--out", str(dest)])
+    print(f"model ready: {dest}")
+    return 0
+
+
 def ensure_onnx(manifest, build_dir, python):
     """Phase B model: verify build/models/openkeyscan3.onnx, downloading or exporting it if needed."""
     entry = manifest["openkeyscan3_onnx"]
@@ -169,17 +180,20 @@ def main():
     ap.add_argument("--build-dir", default=str(ROOT / "build"))
     ap.add_argument("--build", action="store_true", help="build the sidecar from source if no artefact is available")
     ap.add_argument("--python", help="Python 3.12 env with the export pins: export the ONNX model if missing")
-    ap.add_argument("--only", choices=["sidecar", "onnx", "demucs"], help="handle just one artefact")
+    ap.add_argument("--only", choices=["sidecar", "onnx", "demucs", "basic_pitch"], help="handle just one artefact")
     args = ap.parse_args()
 
     manifest = json.loads((ROOT / "models" / "manifest.json").read_text())
     if args.only == "demucs":
         return ensure_demucs(manifest, Path(args.build_dir), args.python)
+    if args.only == "basic_pitch":
+        return ensure_basic_pitch(manifest, Path(args.build_dir))
     onnx_status = 0 if args.only == "sidecar" else ensure_onnx(manifest, Path(args.build_dir), args.python)
     if args.only == "onnx":
         return onnx_status
     if args.only is None:
         ensure_demucs(manifest, Path(args.build_dir), args.python)
+        ensure_basic_pitch(manifest, Path(args.build_dir))
     entry = manifest["openkeyscan_sidecar"]
     plat = platform_id()
     art = entry["artifacts"].get(plat)
