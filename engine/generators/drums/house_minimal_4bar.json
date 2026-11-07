@@ -1,0 +1,31 @@
+{
+  "name": "house_minimal_4bar",
+  "style": "house",
+  "description": "Minimal house over four bars: shuffled hats, rim perc, clap only on 4",
+  "bars": 4,
+  "swing": 0.12,
+  "lanes": {
+    "kick": "X...x...X...x...X...x...X...x...X...x...X...x...X...x...X...x...",
+    "clap": "............X...............X...............X...............X...",
+    "hat": "..x...x...x...x...x...x...x...x...x...x...x...x...x...x...x...x.",
+    "openhat": "..............................................................x.",
+    "perc": "...o......o........o.........o.....o......o........o...o..o..o..",
+    "ride": "x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x."
+  },
+  "fill": {
+    "kick": "X...x...X...x.x.",
+    "clap": "....X.......X.XX"
+  },
+  "riser_hit": {
+    "kick": "X...............",
+    "clap": "x.x.x.x.xxxxXXXX"
+  },
+  "drop": {
+    "kick": "",
+    "perc": "...o...o...o...o"
+  },
+  "half_time": {
+    "kick": "X.......x.......",
+    "clap": "........X......."
+  }
+}

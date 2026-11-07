@@ -1,0 +1,32 @@
+{
+  "name": "trance_drive",
+  "style": "trance",
+  "description": "Trance: four on the floor, offbeat open hats, clap on 2 and 4",
+  "bars": 2,
+  "lanes": {
+    "kick": "X...X...X...X...X...X...X...X...",
+    "clap": "....X.......X.......X.......X...",
+    "hat": "x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.",
+    "openhat": "..X...X...X...X...X...X...X...X.",
+    "perc": "...............o...............o",
+    "ride": "x...x...x...x...x...x...x...x..."
+  },
+  "fill": {
+    "clap": "....X.......XxXX",
+    "kick": "X...X...X...X.X."
+  },
+  "riser_hit": {
+    "kick": "X...............",
+    "clap": "x.x.x.x.xxxxXXXX",
+    "openhat": ""
+  },
+  "drop": {
+    "kick": "",
+    "hat": "",
+    "openhat": "..x...x...x...X."
+  },
+  "half_time": {
+    "kick": "X.......X.......",
+    "clap": "........X......."
+  }
+}

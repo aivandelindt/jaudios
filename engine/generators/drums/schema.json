@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jaudios/drum-pattern.schema.json",
+  "title": "JAudios drum pattern",
+  "description": "A looping groove on a 1/16 grid (drum-generator skill). Every lane is a string with one character per step: 'X' accent, 'x' hit, 'o' soft, 'g' ghost (intensity >= 3 only), '.' rest. Main lanes span `bars` bars; variants are one-bar overlays that replace the last bar of a phrase (a lane missing from a variant keeps the main groove's bar; an empty string silences it).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "style", "bars", "lanes"],
+  "properties": {
+    "name":  { "type": "string", "pattern": "^[a-z0-9_]+$" },
+    "style": { "type": "string", "enum": ["pop", "house", "techno", "trance", "lofi", "rnb", "cinematic"] },
+    "description": { "type": "string" },
+    "bars":  { "type": "integer", "minimum": 2, "maximum": 8 },
+    "swing": { "type": "number", "minimum": 0, "maximum": 0.75 },
+    "lanes": { "$ref": "#/$defs/lanes" },
+    "fill":      { "$ref": "#/$defs/lanes" },
+    "riser_hit": { "$ref": "#/$defs/lanes" },
+    "drop":      { "$ref": "#/$defs/lanes" },
+    "half_time": { "$ref": "#/$defs/lanes" }
+  },
+  "$defs": {
+    "lane": { "type": "string", "pattern": "^[Xxog.]*$" },
+    "lanes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kick":    { "$ref": "#/$defs/lane" },
+        "snare":   { "$ref": "#/$defs/lane" },
+        "clap":    { "$ref": "#/$defs/lane" },
+        "hat":     { "$ref": "#/$defs/lane" },
+        "openhat": { "$ref": "#/$defs/lane" },
+        "perc":    { "$ref": "#/$defs/lane" },
+        "ride":    { "$ref": "#/$defs/lane" }
+      }
+    }
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "name": "house_four_floor",
+  "style": "house",
+  "description": "Four on the floor, clap on 2 and 4, offbeat open hats, 16th closed hats",
+  "bars": 2,
+  "lanes": {
+    "kick": "X...x...X...x...X...x...X...x...",
+    "clap": "....X.......X.......X.......X...",
+    "hat": "x.o.x.o.x.o.x.ogx.o.x.o.x.o.x.og",
+    "openhat": "..x...x...x...x...x...x...x...x.",
+    "perc": "......o.......o..o.....o...o..o.",
+    "ride": "x.......x.......x.......x......."
+  },
+  "fill": {
+    "kick": "X...x...X...x.x.",
+    "clap": "....X.......XoXX",
+    "openhat": "..x...x...x....."
+  },
+  "riser_hit": {
+    "kick": "X...............",
+    "clap": "x.x.x.x.xxxxXXXX",
+    "openhat": "",
+    "hat": "x.x.x.x.xxxxxxxx"
+  },
+  "drop": {
+    "kick": "",
+    "hat": "x.o.x.o.x.o.x.o.",
+    "openhat": "..............X."
+  },
+  "half_time": {
+    "kick": "X.......x.......",
+    "clap": "........X.......",
+    "openhat": "......x.......x."
+  }
+}

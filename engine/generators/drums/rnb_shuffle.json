@@ -1,0 +1,35 @@
+{
+  "name": "rnb_shuffle",
+  "style": "rnb",
+  "description": "R&B: syncopated kick, snare + clap on 2 and 4, shuffled 16th hats with ghosts",
+  "bars": 2,
+  "swing": 0.18,
+  "lanes": {
+    "kick": "X......x..x..x..X..x......x.....",
+    "snare": "....X.......X.......X.......X...",
+    "clap": "....x.......x.......x.......x...",
+    "hat": "xgxgxgxgxgxgxgxgxgxgxgxgxgxgxgxg",
+    "openhat": "..............x.......x.........",
+    "perc": ".......o.......o.......o.......o",
+    "ride": "x.......x.......x.......x......."
+  },
+  "fill": {
+    "kick": "X......x..x.....",
+    "snare": "....X.......XgXX"
+  },
+  "riser_hit": {
+    "kick": "X...............",
+    "snare": "x.x.x.x.xxxxXXXX",
+    "clap": "",
+    "hat": ""
+  },
+  "drop": {
+    "kick": "",
+    "snare": "............X..."
+  },
+  "half_time": {
+    "kick": "X.........x.....",
+    "snare": "........X.......",
+    "clap": "........x......."
+  }
+}

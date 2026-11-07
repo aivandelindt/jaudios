@@ -1,0 +1,34 @@
+{
+  "name": "cinematic_toms",
+  "style": "cinematic",
+  "description": "Cinematic: big kick on 1, perc toms building, ride swells",
+  "bars": 4,
+  "lanes": {
+    "kick": "X...............X.......x.......X...............X.......x...x...",
+    "snare": "........................X...............................X.......",
+    "perc": "....o.......o.......o...o...o.o.....o.......o.......x...x.x.xxxx",
+    "ride": "o.......o.......o.......o.......o.......o.......o.......o.......",
+    "hat": "................................................................"
+  },
+  "fill": {
+    "kick": "X.......X...X.X.",
+    "perc": "x.x.x.x.xxxxXXXX",
+    "snare": "............XXXX"
+  },
+  "riser_hit": {
+    "kick": "X...............",
+    "perc": "x.x.x.x.xxxxXXXX",
+    "snare": "x.x.x.x.xxxxXXXX"
+  },
+  "drop": {
+    "kick": "",
+    "perc": "",
+    "snare": "",
+    "ride": "x..............."
+  },
+  "half_time": {
+    "kick": "X...............",
+    "snare": "........X.......",
+    "perc": "....o.......o..."
+  }
+}

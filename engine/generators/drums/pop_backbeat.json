@@ -1,0 +1,34 @@
+{
+  "name": "pop_backbeat",
+  "style": "pop",
+  "description": "Pop backbeat: kick on 1 and 3 with a pickup, snare on 2 and 4, 8th hats",
+  "bars": 2,
+  "lanes": {
+    "kick": "X.......x.x.....X.......x.....o.",
+    "snare": "....X.......X.......X.......X...",
+    "hat": "x.o.x.o.x.o.x.o.x.o.x.o.x.o.x.o.",
+    "openhat": "..............x...............x.",
+    "perc": "..........o...............o.....",
+    "ride": "x...x...x...x...x...x...x...x..."
+  },
+  "fill": {
+    "kick": "X.......x.......",
+    "snare": "....X.....x.XxXX",
+    "hat": "x.o.x.o.x......."
+  },
+  "riser_hit": {
+    "kick": "X...............",
+    "snare": "x.x.x.x.xxxxXXXX",
+    "hat": ""
+  },
+  "drop": {
+    "kick": "",
+    "snare": "............X...",
+    "hat": "x...x...x...x..."
+  },
+  "half_time": {
+    "kick": "X.........x.....",
+    "snare": "........X.......",
+    "hat": "x...x...x...x..."
+  }
+}
