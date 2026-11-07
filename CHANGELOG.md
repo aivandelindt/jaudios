@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Bass generator (M5)
+- Patterns: `engine/generators/patterns/*.json` (pop root, pop 8ths, house offbeat, techno rolling 1/16, trance rolling,
+  syncopated funk (2 bars, swing), walking, whole notes) against `patterns/schema.json`; embedded at configure time.
+  `tools/validate_patterns.py` (stdlib) checks the schema keywords plus loop bounds, overlaps and unique names; ctest + macOS CI.
+- `generators::generateBass()`: steps take pitch from their role (root / third / fifth / octave / chord / scale / approach)
+  on the chord sounding then; root on every chord's downbeat; passing and approach tones are scale tones (so every note is a
+  chord or scale tone, skill acceptance); octave leaps capped at 20 % of the intervals; notes within a third of a low vocal
+  note (< E3) move an octave or fall back to the root; per-step velocity and gate, grid 1/8..1/32 and swing overrides,
+  1/2/4-bar loops; sidechain flag when a note starts on or holds over a kick.
+- `analysis::detectKicks()`: 4th-order low-pass (110 Hz) energy rise with adaptive, relative and absolute floors. On the fixture
+  mixes recall is 1.0; precision 1.0 on house and the loop, 0.85 on techno and 0.44 on pop, where bass attacks between the
+  kicks share the band. On the pop fixture's HT-Demucs drums stem it is exact (14 / 14), which is the path `--stems` uses.
+- `app-cli bass <file> [--style] [--pattern] [--stems] [--grid] [--swing] [--out FILE.mid]`, `app-cli bass --list-patterns`.
+  The CLI's harmony pipeline (key, beat grid, evidence, suggestions) is shared by `chords` and `bass`.
+
 ### Chord engine (M4)
 - `theory::Chord`: maj / min / dim / aug / sus2 / sus4 / 7 / m7 / maj7 / add9, inversions, names spelled for the key
   signature ("C/E", "Bb", "C#m"), Roman numerals relative to the key's own scale (borrowed bVI / bVII / iv; harmonic-minor

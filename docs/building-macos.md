@@ -48,7 +48,7 @@ Outputs:
 |---|---|
 | App | `build/app/JAudios_artefacts/Release/JAudios.app` |
 | CLI harness | `build/tools/cli/app-cli_artefacts/Release/app-cli` |
-| Tests | `build/tests/jaudios_tests`, `build/tests/jaudios_golden_tests`, `build/tests/jaudios_ml_golden_tests`, `build/tests/jaudios_stems_tests`, `build/tests/jaudios_transcription_tests`, `build/tests/jaudios_chords_tests` |
+| Tests | `build/tests/jaudios_tests`, `build/tests/jaudios_golden_tests`, `build/tests/jaudios_ml_golden_tests`, `build/tests/jaudios_stems_tests`, `build/tests/jaudios_transcription_tests`, `build/tests/jaudios_chords_tests` (chords + bass) |
 
 The ONNX Runtime dylib is copied into `JAudios.app/Contents/Frameworks/` automatically.
 
@@ -205,6 +205,22 @@ each of the first four chords, and writes the best one as MIDI. Options: `--styl
 pop|house|techno|trance|lofi|rnb|cinematic`, `--rhythm 1|2|half` (chords per bar), `--sevenths`,
 `--stems` (melody from the guide stems and bass from the bass stem; needs section 3b),
 `--voicing close|open|drop2`, `--humanize 8`, `--seed N`, `--top N`.
+
+## 3e. Basslines
+
+Also rule-based, on top of the chord suggestions (section 3d):
+
+```bash
+build/tools/cli/app-cli_artefacts/Release/app-cli bass tests/fixtures/house_124_Amin.wav --style house --out /tmp/house.bass.mid
+```
+
+It writes the bassline for the best progression as MIDI and prints every note with its role (root,
+fifth, approach, …) and whether it meets a kick (a sidechain hint for later effects). Patterns live in
+`engine/generators/patterns/*.json` (`--list-patterns` shows them, `--pattern NAME` picks one); new
+ones must pass `python3 tools/validate_patterns.py`. Options: `--style`, `--grid 8|16|32`,
+`--swing 0..0.75`, `--stems`. Kicks are detected on the mix's low band unless `--stems` is given.
+With `--stems` they come from the drums stem, which is more accurate when the bass plays between
+the kicks; the vocal stem's low notes are then kept clear too.
 
 ## 4. Run
 

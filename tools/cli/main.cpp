@@ -16,6 +16,10 @@
 //                  [--out FILE.mid] [--no-cache]
 //                                               chord progressions that fit key, melody, bass and chroma
 //                                               (top N as JSON, top-1 as MIDI)
+//   app-cli bass <audio-file> [--style ...] [--pattern NAME] [--stems] [--grid 8|16|32] [--swing 0..0.75]
+//                [--out FILE.mid] [--no-cache] | app-cli bass --list-patterns
+//                                               a bassline on the top chord progression and the detected
+//                                               groove (kick sidechain hints), as JSON + MIDI
 
 #include "app/core/AnalysisService.h"
 #include "app/core/AudioEngine.h"
@@ -28,6 +32,8 @@
 #include "engine/analysis/stems/StemCache.h"
 #include "engine/analysis/stems/StemSeparator.h"
 #include "engine/analysis/tempo/BeatTracker.h"
+#include "engine/analysis/tempo/KickDetector.h"
+#include "engine/generators/BassGenerator.h"
 #include "engine/analysis/transcription/AudioToMidi.h"
 #include "engine/analysis/transcription/Quantize.h"
 
@@ -69,7 +75,10 @@ int usage()
                  "                   [--quantize 4|8|16|32|off] [--onset T] [--frame T] [--min-ms MS] [--out FILE.mid] [--no-cache]\n"
                  "  app-cli chords <audio-file> [--style pop|house|techno|trance|lofi|rnb|cinematic] [--rhythm 1|2|half]\n"
                  "                   [--sevenths] [--stems] [--top N] [--seed N] [--voicing close|open|drop2] [--humanize N]\n"
-                 "                   [--out FILE.mid] [--no-cache]\n";
+                 "                   [--out FILE.mid] [--no-cache]\n"
+                 "  app-cli bass <audio-file> [--style ...] [--pattern NAME] [--stems] [--grid 8|16|32] [--swing 0..0.75]\n"
+                 "                   [--out FILE.mid] [--no-cache]\n"
+                 "  app-cli bass --list-patterns\n";
     return 2;
 }
 
@@ -525,85 +534,107 @@ struct ChordOptions
     juce::File out;
 };
 
-int cmdChords (const juce::File& file, ChordOptions opt)
+/** Key + beat grid + melody / bass evidence + chord suggestions (shared by `chords` and `bass`). */
+struct HarmonyRun
+{
+    jaudios::analysis::AnalysisResult analysis;
+    jaudios::generators::HarmonicSource source;
+    std::vector<jaudios::generators::Progression> progressions;
+    std::vector<std::vector<jaudios::generators::Alternative>> alts;
+    std::optional<jaudios::analysis::stems::Stems> stems;
+    std::vector<jaudios::analysis::transcription::Note> vocals; // the vocal stem's notes (--stems)
+    juce::String separation = "none", error;
+    double engineMs = 0.0;
+    int melodyNotes = 0, bassNotes = 0;
+};
+
+std::optional<HarmonyRun> runHarmony (const jaudios::analysis::CaptureResult& capture, const jaudios::generators::EngineSettings& engine,
+                                      bool useStems, bool useCache)
 {
     using namespace jaudios::analysis;
     namespace gen = jaudios::generators;
     namespace tr = jaudios::analysis::transcription;
-    double importMs = 0.0;
-    const auto capture = importOrReport (file, importMs);
-    if (! capture)
-        return 1;
-
     const auto config = AppConfig::fromEnvironment();
     const auto bpModel = findModelFile (config, "basic_pitch.onnx");
     if (bpModel == juce::File())
     {
         std::cerr << "error: basic_pitch.onnx not found (python3 tools/models.py --only basic_pitch, or set JAUDIOS_MODELS_DIR)\n";
-        return 1;
+        return std::nullopt;
     }
 
+    HarmonyRun o;
     // melody / bass evidence: the guide + bass stems (--stems), or the mix split at C3
-    std::optional<jaudios::analysis::stems::Stems> stemsOut;
-    juce::String separation = "none";
-    if (opt.stems)
+    if (useStems)
     {
-        const auto run = runSeparation (*capture, opt.useCache);
+        const auto run = runSeparation (capture, useCache);
         if (! run.ok())
         {
             std::cerr << "error: " << run.error << "\n";
-            return 1;
+            return std::nullopt;
         }
-        separation = run.cacheHit ? "cache" : "htdemucs (" + run.provider + ")";
-        stemsOut = *run.result->stems;
+        o.separation = run.cacheHit ? "cache" : "htdemucs (" + run.provider + ")";
+        o.stems = *run.result->stems;
     }
 
     auto keyDetector = makeKeyDetector (config);
     jaudios::AnalysisService service;
-    struct Out { AnalysisResult analysis; gen::HarmonicSource source; std::vector<gen::Progression> progressions;
-                 std::vector<std::vector<gen::Alternative>> alts; double engineMs = 0.0; int melodyNotes = 0, bassNotes = 0; juce::String error; };
-    std::optional<Out> result;
-    service.submit<Out> (
+    std::optional<HarmonyRun> result;
+    service.submit<HarmonyRun> (
         [&] {
-            Out o;
-            o.analysis = analyze (*capture, *keyDetector.detector);
+            o.analysis = analyze (capture, *keyDetector.detector);
             tr::AudioToMidi a2m (bpModel);
             std::vector<tr::Note> melody, bass;
-            if (stemsOut)
+            if (o.stems)
             {
                 tr::TranscriptionSettings mono;
                 mono.monophonic = true;
-                melody = a2m.transcribe (jaudios::analysis::stems::mixGuide (*stemsOut), capture->sampleRate).notes;
-                bass = a2m.transcribe ((*stemsOut)[jaudios::analysis::stems::Stem::bass], capture->sampleRate, mono).notes;
+                melody = a2m.transcribe (stems::mixGuide (*o.stems), capture.sampleRate).notes;
+                bass = a2m.transcribe ((*o.stems)[stems::Stem::bass], capture.sampleRate, mono).notes;
+                o.vocals = a2m.transcribe ((*o.stems)[stems::Stem::vocals], capture.sampleRate).notes;
             }
             else
             {
-                const auto t = a2m.transcribe (capture->buffer, capture->sampleRate);
+                const auto t = a2m.transcribe (capture.buffer, capture.sampleRate);
                 if (! t.ok())
                 {
                     o.error = t.error;
-                    return o;
+                    return std::move (o);
                 }
                 jaudios::splitBass (t.notes, 48, melody, bass);
             }
             o.melodyNotes = (int) melody.size();
             o.bassNotes = (int) bass.size();
-            o.source = jaudios::makeHarmonicSource (o.analysis, capture->durationSeconds(), melody, bass);
+            o.source = jaudios::makeHarmonicSource (o.analysis, capture.durationSeconds(), melody, bass);
             const auto t0 = juce::Time::getMillisecondCounterHiRes();
-            o.progressions = gen::suggest (o.source, opt.engine);
+            o.progressions = gen::suggest (o.source, engine);
             o.engineMs = juce::Time::getMillisecondCounterHiRes() - t0;
             if (! o.progressions.empty())
                 for (int slot = 0; slot < std::min<int> (4, (int) o.progressions[0].chords.size()); ++slot)
-                    o.alts.push_back (gen::alternatives (o.source, o.progressions[0], slot, opt.engine));
-            return o;
+                    o.alts.push_back (gen::alternatives (o.source, o.progressions[0], slot, engine));
+            return std::move (o);
         },
-        [&] (Out o) { result = std::move (o); });
+        [&] (HarmonyRun r) { result = std::move (r); });
     service.waitUntilIdle();
     if (! result || result->error.isNotEmpty() || result->progressions.empty())
     {
         std::cerr << "error: " << (result && result->error.isNotEmpty() ? result->error : juce::String ("no progression (no bars found)")) << "\n";
-        return 1;
+        return std::nullopt;
     }
+    return result;
+}
+
+int cmdChords (const juce::File& file, ChordOptions opt)
+{
+    using namespace jaudios::analysis;
+    namespace gen = jaudios::generators;
+    double importMs = 0.0;
+    const auto capture = importOrReport (file, importMs);
+    if (! capture)
+        return 1;
+    auto result = runHarmony (*capture, opt.engine, opt.stems, opt.useCache);
+    if (! result)
+        return 1;
+    const auto& separation = result->separation;
 
     const auto key = result->source.key;
     const auto& top = result->progressions.front();
@@ -666,6 +697,110 @@ int cmdChords (const juce::File& file, ChordOptions opt)
     return 0;
 }
 
+struct BassOptions
+{
+    jaudios::generators::EngineSettings engine;
+    std::string pattern;
+    jaudios::generators::BassSettings bass;
+    bool stems = false, useCache = true;
+    juce::File out;
+};
+
+int cmdListPatterns()
+{
+    juce::Array<var> list;
+    for (const auto& p : jaudios::generators::builtinBassPatterns())
+        list.add (makeObject ({ { "name", juce::String (p.name) }, { "style", juce::String (p.style) }, { "grid", p.grid },
+                                { "bars", p.bars }, { "swing", p.swing }, { "steps", (int) p.steps.size() },
+                                { "description", juce::String (p.description) } }));
+    printJson (makeObject ({ { "patterns", list } }));
+    return 0;
+}
+
+int cmdBass (const juce::File& file, BassOptions opt)
+{
+    using namespace jaudios::analysis;
+    namespace gen = jaudios::generators;
+    double importMs = 0.0;
+    const auto capture = importOrReport (file, importMs);
+    if (! capture)
+        return 1;
+
+    const gen::BassPattern* pattern = opt.pattern.empty() ? gen::bassPatternsFor (opt.engine.style).front()
+                                                          : gen::findBassPattern (opt.pattern);
+    if (pattern == nullptr)
+    {
+        std::cerr << "error: no bass pattern '" << opt.pattern << "' (app-cli bass --list-patterns)\n";
+        return 2;
+    }
+    auto harmony = runHarmony (*capture, opt.engine, opt.stems, opt.useCache);
+    if (! harmony)
+        return 1;
+
+    // kicks from the drums stem (--stems), else from the mix's low band
+    juce::AudioBuffer<float> mono (1, capture->buffer.getNumSamples());
+    mono.clear();
+    const auto& kickSource = harmony->stems ? (*harmony->stems)[stems::Stem::drums] : capture->buffer;
+    for (int ch = 0; ch < kickSource.getNumChannels(); ++ch)
+        mono.addFrom (0, 0, kickSource, ch, 0, mono.getNumSamples(), 1.0f / (float) kickSource.getNumChannels());
+
+    gen::BassInput in;
+    in.key = harmony->source.key;
+    for (const auto& b : harmony->source.bars)
+        in.bars.push_back ({ b.startSec, b.endSec });
+    in.progression = harmony->progressions.front();
+    in.kicks = detectKicks (mono.getReadPointer (0), mono.getNumSamples(), capture->sampleRate);
+    for (const auto& v : harmony->vocals)
+        in.vocals.push_back ({ v.startSec, v.endSec, v.pitch, v.confidence });
+    const auto t0 = juce::Time::getMillisecondCounterHiRes();
+    const auto notes = gen::generateBass (in, *pattern, opt.bass);
+    const double genMs = juce::Time::getMillisecondCounterHiRes() - t0;
+
+    juce::MidiMessageSequence seq;
+    int sidechained = 0, chordTones = 0;
+    juce::Array<var> list;
+    for (const auto& n : notes)
+    {
+        seq.addEvent (juce::MidiMessage::noteOn (1, n.pitch, (juce::uint8) n.velocity).withTimeStamp (n.startSec));
+        seq.addEvent (juce::MidiMessage::noteOff (1, n.pitch).withTimeStamp (n.endSec));
+        sidechained += n.sidechain ? 1 : 0;
+        chordTones += in.progression.chords[(size_t) n.slot].contains (n.pitch % 12) ? 1 : 0;
+        list.add (makeObject ({ { "start", n.startSec }, { "end", n.endSec }, { "pitch", n.pitch }, { "velocity", n.velocity },
+                                { "role", gen::roleName (n.role) }, { "chord", juce::String (in.progression.chords[(size_t) n.slot].name (in.key)) },
+                                { "sidechain", n.sidechain } }));
+    }
+    seq.sort();
+    seq.updateMatchedPairs();
+    if (opt.out == juce::File())
+        opt.out = file.getSiblingFile (file.getFileNameWithoutExtension() + ".bass.mid");
+    const double bpm = harmony->analysis.rhythm.bpm > 0.0 ? harmony->analysis.rhythm.bpm : 120.0;
+    if (! writeMidiFile (opt.out, seq, bpm))
+    {
+        std::cerr << "error: cannot write " << opt.out.getFullPathName() << "\n";
+        return 1;
+    }
+    printJson (makeObject ({
+        { "file", file.getFullPathName() },
+        { "key", juce::String (jaudios::theory::traditionalName (in.key)) },
+        { "progression", juce::String (in.progression.summary (in.key)) },
+        { "pattern", juce::String (pattern->name) },
+        { "grid", opt.bass.gridOverride.value_or (pattern->grid) },
+        { "swing", opt.bass.swingOverride.value_or (pattern->swing) },
+        { "kicks", (int) in.kicks.size() },
+        { "kick_source", harmony->stems ? "drums stem" : "mix low band" },
+        { "low_vocal_notes", (int) std::count_if (in.vocals.begin(), in.vocals.end(), [&] (const gen::SourceNote& v) { return v.pitch < opt.bass.vocalLowMidi; }) },
+        { "note_count", (int) notes.size() },
+        { "chord_tone_share", notes.empty() ? 0.0 : (double) chordTones / (double) notes.size() },
+        { "sidechain_notes", sidechained },
+        { "bpm", bpm },
+        { "generate_ms", genMs },
+        { "midi_file", opt.out.getFullPathName() },
+        { "notes", list },
+        { "import_ms", importMs },
+    }));
+    return 0;
+}
+
 } // namespace
 
 int main (int argc, char** argv)
@@ -679,6 +814,9 @@ int main (int argc, char** argv)
 
     if (cmd == "info")
         return cmdInfo();
+
+    if (cmd == "bass" && argc >= 3 && juce::String (argv[2]) == "--list-patterns")
+        return cmdListPatterns();
 
     if (argc < 3)
         return usage();
@@ -802,6 +940,38 @@ int main (int argc, char** argv)
             else return usage();
         }
         return cmdChords (file, opt);
+    }
+
+    if (cmd == "bass")
+    {
+        namespace gen = jaudios::generators;
+        BassOptions opt;
+        for (int i = 3; i < argc; ++i)
+        {
+            const juce::String a (argv[i]);
+            const bool hasValue = i + 1 < argc;
+            if (a == "--stems") opt.stems = true;
+            else if (a == "--no-cache") opt.useCache = false;
+            else if (a == "--style" && hasValue)
+            {
+                const auto st = gen::styleFromName (argv[++i]);
+                if (! st)
+                    return usage();
+                opt.engine.style = *st;
+            }
+            else if (a == "--pattern" && hasValue) opt.pattern = argv[++i];
+            else if (a == "--grid" && hasValue)
+            {
+                const int g = juce::String (argv[++i]).getIntValue();
+                if (g != 8 && g != 16 && g != 32)
+                    return usage();
+                opt.bass.gridOverride = g;
+            }
+            else if (a == "--swing" && hasValue) opt.bass.swingOverride = juce::jlimit (0.0, 0.75, juce::String (argv[++i]).getDoubleValue());
+            else if (a == "--out" && hasValue) opt.out = argFile (argv[++i]);
+            else return usage();
+        }
+        return cmdBass (file, opt);
     }
 
     return usage();

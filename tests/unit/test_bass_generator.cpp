@@ -262,6 +262,14 @@ TEST_CASE ("Kick detector finds kicks, not hats", "[bass][kicks]")
         CHECK (std::abs (kicks[i] - truth[i]) < 0.02);
 }
 
+TEST_CASE ("Kick detector finds a kick at the very start", "[bass][kicks]")
+{
+    const auto audio = drums ({ 0.0, 0.5, 1.0 }, 0.25, 1.5);
+    const auto kicks = analysis::detectKicks (audio.data(), (int) audio.size(), 44100.0);
+    REQUIRE (kicks.size() == 3);
+    CHECK (kicks[0] < 0.02);
+}
+
 TEST_CASE ("Kick detector: silence and hats only give no kicks", "[bass][kicks]")
 {
     std::vector<float> silence (44100, 0.0f);

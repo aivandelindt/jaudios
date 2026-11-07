@@ -47,19 +47,21 @@ std::vector<double> detectKicks (const float* x, int n, double sr, const KickSet
     }
 
     // onset strength: energy rise over two frames (~12 ms: the kick's attack), half-wave rectified
+    // (before the first frame counts as silence, so a kick at t = 0 is found)
+    auto dbAt = [&] (int f) { return f < 0 ? -120.0 : db[(size_t) f]; };
     std::vector<double> rise ((size_t) frames, 0.0);
-    for (int f = 2; f < frames; ++f)
-        rise[(size_t) f] = std::max (0.0, db[(size_t) f] - std::min (db[(size_t) f - 1], db[(size_t) f - 2]));
+    for (int f = 0; f < frames; ++f)
+        rise[(size_t) f] = std::max (0.0, dbAt (f) - std::min (dbAt (f - 1), dbAt (f - 2)));
     std::vector<double> sorted (rise);
     std::nth_element (sorted.begin(), sorted.begin() + (long) sorted.size() / 2, sorted.end());
     const double threshold = sorted[sorted.size() / 2] + s.thresholdDb;
 
     const int minGap = std::max (1, (int) std::lround (s.minIntervalSec * sr / hop));
     int last = -minGap;
-    for (int f = 2; f + 1 < frames; ++f)
+    for (int f = 0; f + 1 < frames; ++f)
     {
         const double r = rise[(size_t) f];
-        if (r < threshold || r < rise[(size_t) f - 1] || r <= rise[(size_t) f + 1])
+        if (r < threshold || (f > 0 && r < rise[(size_t) f - 1]) || r <= rise[(size_t) f + 1])
             continue;
         // the energy the onset reaches (a few frames on) must be loud enough
         double peak = db[(size_t) f];
@@ -67,7 +69,7 @@ std::vector<double> detectKicks (const float* x, int n, double sr, const KickSet
             peak = std::max (peak, db[(size_t) k]);
         if (peak < loudest + s.floorDb || peak < s.absoluteFloorDb || f - last < minGap)
             continue;
-        kicks.push_back ((double) (f - 1) * hop / sr); // the rise starts in the frame before
+        kicks.push_back ((double) std::max (0, f - 1) * hop / sr); // the rise starts in the frame before
         last = f;
     }
     return kicks;
