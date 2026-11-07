@@ -50,7 +50,7 @@ if(JAUDIOS_WITH_ONNXRUNTIME)
     target_compile_definitions(engine_analysis PRIVATE JAUDIOS_HAS_ONNXRUNTIME=1)
 endif()
 
-jaudios_engine_lib(engine_generators DEPS engine_theory)
+jaudios_engine_lib(engine_generators SOURCES ${CMAKE_CURRENT_LIST_DIR}/generators/ChordEngine.cpp DEPS engine_theory)
 jaudios_engine_lib(engine_synth      DEPS jaudios_juce)
 jaudios_engine_lib(engine_fx         DEPS jaudios_juce)
 jaudios_engine_lib(engine_export     DEPS jaudios_juce)

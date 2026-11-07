@@ -11,9 +11,15 @@
 //                      [--quantize 4|8|16|32|off] [--onset T] [--frame T] [--min-ms MS] [--out FILE.mid] [--no-cache]
 //                                               Basic Pitch notes as JSON + a MIDI file (bass stem: monophonic,
 //                                               default 1/16 quantise on the detected beat grid, swing kept)
+//   app-cli chords <audio-file> [--style pop|house|techno|trance|lofi|rnb|cinematic] [--rhythm 1|2|half]
+//                  [--sevenths] [--stems] [--top N] [--seed N] [--voicing close|open|drop2] [--humanize N]
+//                  [--out FILE.mid] [--no-cache]
+//                                               chord progressions that fit key, melody, bass and chroma
+//                                               (top N as JSON, top-1 as MIDI)
 
 #include "app/core/AnalysisService.h"
 #include "app/core/AudioEngine.h"
+#include "app/core/HarmonySource.h"
 #include "app/core/OfflineRender.h"
 #include "app/core/RealtimeTrap.h"
 #include "engine/analysis/Analysis.h"
@@ -60,7 +66,10 @@ int usage()
                  "  app-cli separate <audio-file> [--out DIR] [--guide other+vocals] [--no-cache]\n"
                  "                   (default DIR: <file name>.stems/ next to the file; cache: JAUDIOS_STEM_CACHE_DIR)\n"
                  "  app-cli transcribe <audio-file> [--stem mix|drums|bass|other|vocals|guide] [--mono|--poly]\n"
-                 "                   [--quantize 4|8|16|32|off] [--onset T] [--frame T] [--min-ms MS] [--out FILE.mid] [--no-cache]\n";
+                 "                   [--quantize 4|8|16|32|off] [--onset T] [--frame T] [--min-ms MS] [--out FILE.mid] [--no-cache]\n"
+                 "  app-cli chords <audio-file> [--style pop|house|techno|trance|lofi|rnb|cinematic] [--rhythm 1|2|half]\n"
+                 "                   [--sevenths] [--stems] [--top N] [--seed N] [--voicing close|open|drop2] [--humanize N]\n"
+                 "                   [--out FILE.mid] [--no-cache]\n";
     return 2;
 }
 
@@ -508,6 +517,155 @@ int cmdTranscribe (const juce::File& file, TranscribeOptions opt)
     return 0;
 }
 
+struct ChordOptions
+{
+    jaudios::generators::EngineSettings engine;
+    jaudios::generators::RenderSettings render;
+    bool stems = false, useCache = true;
+    juce::File out;
+};
+
+int cmdChords (const juce::File& file, ChordOptions opt)
+{
+    using namespace jaudios::analysis;
+    namespace gen = jaudios::generators;
+    namespace tr = jaudios::analysis::transcription;
+    double importMs = 0.0;
+    const auto capture = importOrReport (file, importMs);
+    if (! capture)
+        return 1;
+
+    const auto config = AppConfig::fromEnvironment();
+    const auto bpModel = findModelFile (config, "basic_pitch.onnx");
+    if (bpModel == juce::File())
+    {
+        std::cerr << "error: basic_pitch.onnx not found (python3 tools/models.py --only basic_pitch, or set JAUDIOS_MODELS_DIR)\n";
+        return 1;
+    }
+
+    // melody / bass evidence: the guide + bass stems (--stems), or the mix split at C3
+    std::optional<jaudios::analysis::stems::Stems> stemsOut;
+    juce::String separation = "none";
+    if (opt.stems)
+    {
+        const auto run = runSeparation (*capture, opt.useCache);
+        if (! run.ok())
+        {
+            std::cerr << "error: " << run.error << "\n";
+            return 1;
+        }
+        separation = run.cacheHit ? "cache" : "htdemucs (" + run.provider + ")";
+        stemsOut = *run.result->stems;
+    }
+
+    auto keyDetector = makeKeyDetector (config);
+    jaudios::AnalysisService service;
+    struct Out { AnalysisResult analysis; gen::HarmonicSource source; std::vector<gen::Progression> progressions;
+                 std::vector<std::vector<gen::Alternative>> alts; double engineMs = 0.0; int melodyNotes = 0, bassNotes = 0; juce::String error; };
+    std::optional<Out> result;
+    service.submit<Out> (
+        [&] {
+            Out o;
+            o.analysis = analyze (*capture, *keyDetector.detector);
+            tr::AudioToMidi a2m (bpModel);
+            std::vector<tr::Note> melody, bass;
+            if (stemsOut)
+            {
+                tr::TranscriptionSettings mono;
+                mono.monophonic = true;
+                melody = a2m.transcribe (jaudios::analysis::stems::mixGuide (*stemsOut), capture->sampleRate).notes;
+                bass = a2m.transcribe ((*stemsOut)[jaudios::analysis::stems::Stem::bass], capture->sampleRate, mono).notes;
+            }
+            else
+            {
+                const auto t = a2m.transcribe (capture->buffer, capture->sampleRate);
+                if (! t.ok())
+                {
+                    o.error = t.error;
+                    return o;
+                }
+                jaudios::splitBass (t.notes, 48, melody, bass);
+            }
+            o.melodyNotes = (int) melody.size();
+            o.bassNotes = (int) bass.size();
+            o.source = jaudios::makeHarmonicSource (o.analysis, capture->durationSeconds(), melody, bass);
+            const auto t0 = juce::Time::getMillisecondCounterHiRes();
+            o.progressions = gen::suggest (o.source, opt.engine);
+            o.engineMs = juce::Time::getMillisecondCounterHiRes() - t0;
+            if (! o.progressions.empty())
+                for (int slot = 0; slot < std::min<int> (4, (int) o.progressions[0].chords.size()); ++slot)
+                    o.alts.push_back (gen::alternatives (o.source, o.progressions[0], slot, opt.engine));
+            return o;
+        },
+        [&] (Out o) { result = std::move (o); });
+    service.waitUntilIdle();
+    if (! result || result->error.isNotEmpty() || result->progressions.empty())
+    {
+        std::cerr << "error: " << (result && result->error.isNotEmpty() ? result->error : juce::String ("no progression (no bars found)")) << "\n";
+        return 1;
+    }
+
+    const auto key = result->source.key;
+    const auto& top = result->progressions.front();
+    juce::MidiMessageSequence seq;
+    for (const auto& n : gen::render (top, opt.render))
+    {
+        seq.addEvent (juce::MidiMessage::noteOn (1, n.pitch, (juce::uint8) n.velocity).withTimeStamp (n.startSec));
+        seq.addEvent (juce::MidiMessage::noteOff (1, n.pitch).withTimeStamp (n.endSec));
+    }
+    seq.sort();
+    seq.updateMatchedPairs();
+    if (opt.out == juce::File())
+        opt.out = file.getSiblingFile (file.getFileNameWithoutExtension() + ".chords.mid");
+    const double bpm = result->analysis.rhythm.bpm > 0.0 ? result->analysis.rhythm.bpm : 120.0;
+    if (! writeMidiFile (opt.out, seq, bpm))
+    {
+        std::cerr << "error: cannot write " << opt.out.getFullPathName() << "\n";
+        return 1;
+    }
+
+    auto names = [&] (const gen::Progression& p) {
+        juce::Array<var> a;
+        for (const auto& c : p.chords)
+            a.add (juce::String (c.name (key)));
+        return a;
+    };
+    juce::Array<var> progressions;
+    for (const auto& p : result->progressions)
+        progressions.add (makeObject ({
+            { "summary", juce::String (p.summary (key)) },
+            { "source", juce::String (p.source) },
+            { "score", p.score.total },
+            { "parts", makeObject ({ { "melody", p.score.melody }, { "bass", p.score.bass }, { "chroma", p.score.chroma },
+                                     { "prior", p.score.prior }, { "voice_leading", p.score.voiceLeading } }) },
+            { "max_voice_leading", p.maxVoiceLeading },
+            { "chords", names (p) },
+        }));
+    juce::Array<var> alts;
+    for (size_t slot = 0; slot < result->alts.size(); ++slot)
+    {
+        juce::Array<var> a;
+        for (const auto& x : result->alts[slot])
+            a.add (makeObject ({ { "chord", juce::String (x.chord.name (key)) }, { "roman", juce::String (x.roman) }, { "score", x.score } }));
+        alts.add (makeObject ({ { "slot", (int) slot }, { "current", juce::String (top.chords[slot].name (key)) }, { "alternatives", a } }));
+    }
+    printJson (makeObject ({
+        { "file", file.getFullPathName() },
+        { "key", juce::String (jaudios::theory::traditionalName (key)) },
+        { "key_margin", result->source.keyMargin },
+        { "style", jaudios::generators::styleName (opt.engine.style) },
+        { "bars", (int) result->source.bars.size() },
+        { "bpm", bpm },
+        { "evidence", makeObject ({ { "separation", separation }, { "melody_notes", result->melodyNotes }, { "bass_notes", result->bassNotes } }) },
+        { "engine_ms", result->engineMs },
+        { "progressions", progressions },
+        { "alternatives", alts },
+        { "midi_file", opt.out.getFullPathName() },
+        { "import_ms", importMs },
+    }));
+    return 0;
+}
+
 } // namespace
 
 int main (int argc, char** argv)
@@ -601,6 +759,49 @@ int main (int argc, char** argv)
                 return usage();
         }
         return cmdTranscribe (file, opt);
+    }
+
+    if (cmd == "chords")
+    {
+        namespace gen = jaudios::generators;
+        ChordOptions opt;
+        for (int i = 3; i < argc; ++i)
+        {
+            const juce::String a (argv[i]);
+            const bool hasValue = i + 1 < argc;
+            if (a == "--sevenths") opt.engine.sevenths = true;
+            else if (a == "--stems") opt.stems = true;
+            else if (a == "--no-cache") opt.useCache = false;
+            else if (a == "--style" && hasValue)
+            {
+                const auto s = gen::styleFromName (argv[++i]);
+                if (! s)
+                    return usage();
+                opt.engine.style = *s;
+            }
+            else if (a == "--rhythm" && hasValue)
+            {
+                const juce::String r (argv[++i]);
+                if (r == "1") opt.engine.rhythm = gen::HarmonicRhythm::onePerBar;
+                else if (r == "2") opt.engine.rhythm = gen::HarmonicRhythm::twoPerBar;
+                else if (r == "half" || r == "0.5") opt.engine.rhythm = gen::HarmonicRhythm::onePerTwoBars;
+                else return usage();
+            }
+            else if (a == "--voicing" && hasValue)
+            {
+                const juce::String v (argv[++i]);
+                if (v == "close") opt.render.voicing = jaudios::theory::Voicing::close;
+                else if (v == "open") opt.render.voicing = jaudios::theory::Voicing::open;
+                else if (v == "drop2") opt.render.voicing = jaudios::theory::Voicing::drop2;
+                else return usage();
+            }
+            else if (a == "--top" && hasValue) opt.engine.topN = juce::jlimit (1, 32, juce::String (argv[++i]).getIntValue());
+            else if (a == "--seed" && hasValue) opt.render.seed = opt.engine.seed = (uint32_t) juce::String (argv[++i]).getLargeIntValue();
+            else if (a == "--humanize" && hasValue) opt.render.humanize = juce::jlimit (0, 32, juce::String (argv[++i]).getIntValue());
+            else if (a == "--out" && hasValue) opt.out = argFile (argv[++i]);
+            else return usage();
+        }
+        return cmdChords (file, opt);
     }
 
     return usage();

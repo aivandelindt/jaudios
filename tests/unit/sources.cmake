@@ -19,4 +19,7 @@ set(JAUDIOS_TEST_SOURCES
     # stem-separation
     ${CMAKE_CURRENT_LIST_DIR}/test_stems.cpp
     # audio-to-midi
-    ${CMAKE_CURRENT_LIST_DIR}/test_transcription.cpp)
+    ${CMAKE_CURRENT_LIST_DIR}/test_transcription.cpp
+    # chord-engine
+    ${CMAKE_CURRENT_LIST_DIR}/test_chord_theory.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/test_chord_engine.cpp)

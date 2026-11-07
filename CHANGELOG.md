@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Chord engine (M4)
+- `theory::Chord`: maj / min / dim / aug / sus2 / sus4 / 7 / m7 / maj7 / add9, inversions, names spelled for the key
+  signature ("C/E", "Bb", "C#m"), Roman numerals relative to the key's own scale (borrowed bVI / bVII / iv; harmonic-minor
+  V), close / open / drop-2 voicings, `voiceLead()` (nearest chord tones, keeps root / third / 7th first) and
+  `voiceLeadingCost()` (minimum pitch-class movement).
+- `generators::ChordEngine`: weighted templates for pop, house, techno, trance, lo-fi, R&B and cinematic in major and minor
+  (with modal mixture); harmonic rhythm 1 / 2 per bar or 1 per 2 bars on the downbeat bars; score = w1 melody consonance +
+  w2 bass agreement + w3 chroma match + w4 template prior - w5 voice leading (per slot), the prior scaled down when the key
+  margin is low. Candidates: every template at every rotation (inversion from the bass) plus an exact Viterbi fit over the
+  key's vocabulary. Top 8, deterministic given the seed; six ranked alternatives per slot; rendering with voice leading,
+  voicing, octave and seeded velocity humanize.
+- `app/core/HarmonySource`: analysis + transcription -> engine evidence. `app-cli chords <file> [--style] [--rhythm]
+  [--sevenths] [--stems] [--voicing] [--humanize] [--top] [--seed] [--out FILE.mid]`.
+- Results: top-1 matches every bar of the truth chords on pop (C G Am F), house (Am F C G), techno (Fm Fm Bbm Fm) and the
+  loop (G C Em D), also where key detection chose the relative key; C major fixture: only I / IV / V / vi, voice leading
+  <= 6 (skill acceptance). A key change re-renders in <= 3.4 ms for 32 bars (target < 50 ms).
+
 ### Audio to MIDI (M3)
 - Model: Basic Pitch (Spotify, Apache-2.0) uses upstream's own `nmp.onnx` from the pinned basic-pitch 0.4.0 wheel,
   byte-for-byte. `ml/fetch_basic_pitch.py` (stdlib only) checks the wheel's and the model's sha256;
