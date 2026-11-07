@@ -2,6 +2,9 @@
 # a GitHub-hosted arm64 Mac so every PR is checked on the real platform, including the CoreML
 # execution provider and the app bundle layout.
 #
+# The stem model (HT-Demucs, 174 MB) is exported on the Mac itself, parity-checked against PyTorch,
+# and the C++ separator is golden-tested against upstream demucs there (jaudios_stems_tests).
+#
 # The key model is exported once on Linux (parity-checked; it carries a provenance record because
 # exports are not byte-identical across machines) and handed to the macOS job, which also exports
 # its own and proves the app accepts it.
@@ -96,6 +99,10 @@ jobs:
           [ -x "$ML_VENV/bin/python" ] || python3.12 -m venv "$ML_VENV"
           PINS=$(python3 -c "import json; m=json.load(open('models/manifest.json')); p={**m['openkeyscan_sidecar']['build']['pins'], **m['openkeyscan3_onnx']['export']['pins']}; print(' '.join(f'{k}=={v}' for k,v in p.items() if k not in ('python','pyinstaller','pyinstaller-hooks-contrib')))")
           "$ML_VENV/bin/pip" install -q $PINS tqdm
+          # demucs and its import-time deps without their other requirements (torchaudio, dora, ...),
+          # which would replace the pinned torch
+          DEMUCS=$(python3 -c "import json; p=json.load(open('models/manifest.json'))['htdemucs_onnx']['export']['pins']; print(' '.join(f'{k}=={p[k]}' for k in ('demucs','einops','julius','pyyaml')))")
+          "$ML_VENV/bin/pip" install -q --no-deps $DEMUCS
 
       - name: Configure (Release)
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DJAUDIOS_ML_PYTHON="$ML_VENV/bin/python"
@@ -115,6 +122,13 @@ jobs:
       - name: Verify model (manifest sha256 or verified provenance)
         run: python3 tools/models.py --only onnx
 
+      - name: Stem model (export HT-Demucs on macOS + parity vs PyTorch)
+        env:
+          PYTHONFAULTHANDLER: "1"
+        run: |
+          python3 tools/models.py --only demucs --python "$ML_VENV/bin/python"
+          cat build/models/htdemucs.onnx.provenance.json
+
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
@@ -131,6 +145,26 @@ jobs:
           CLI=build/tools/cli/app-cli_artefacts/Release/app-cli
           JAUDIOS_LOG_LEVEL=debug "$CLI" analyze tests/fixtures/house_124_Amin.wav
           KEY_BACKEND=chroma "$CLI" analyze tests/fixtures/house_124_Amin.wav | head -40
+
+      - name: Stem separation of a 3-minute track (skill target < 60 s on M-series)
+        run: |
+          "$ML_VENV/bin/python" -c "import numpy as np, soundfile as sf; w=[sf.read(f'tests/fixtures/{n}.wav', dtype='float32')[0] for n in ('house_124_Amin','pop_100_Cmaj','techno_132_Fmin')]; sf.write('$RUNNER_TEMP/three_min.wav', np.concatenate(w)[:180*44100], 44100, subtype='FLOAT')"
+          sysctl -n machdep.cpu.brand_string hw.physicalcpu hw.memsize
+          CLI=build/tools/cli/app-cli_artefacts/Release/app-cli
+          JAUDIOS_LOG_LEVEL=debug "$CLI" separate "$RUNNER_TEMP/three_min.wav" --no-cache --out "$RUNNER_TEMP/stems" | tee "$RUNNER_TEMP/sep.json"
+          python3 - "$RUNNER_TEMP/sep.json" <<'PY'
+          import json, sys
+          d = json.load(open(sys.argv[1]))
+          print(f"{d['duration_sec']:.0f} s track: {d['segments']} segments in {d['separate_sec']:.1f} s on {d['execution_provider']}, null {d['null_residual_dbfs']:.1f} dBFS")
+          if d['separate_sec'] >= 60:
+              print(f"::warning::3-minute separation took {d['separate_sec']:.0f} s (target < 60 s on an M-series Mac; GitHub's runner is a 3-core M1 VM)")
+          sys.exit(0 if d['null_residual_dbfs'] < -40 else 1)
+          PY
+
+      - name: Stem separation with the CoreML execution provider (diagnostic)
+        continue-on-error: true
+        run: |
+          JAUDIOS_ONNX_COREML=1 JAUDIOS_LOG_LEVEL=debug build/tools/cli/app-cli_artefacts/Release/app-cli separate tests/fixtures/loop_8bar_Gmaj.wav --no-cache --out "$RUNNER_TEMP/stems-coreml" | head -20
 
       - name: Realtime check
         run: tools/rt_check.sh

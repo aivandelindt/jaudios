@@ -10,14 +10,21 @@
 namespace jaudios
 {
 
-/** Mixer channels. M1 only wires `source`; chords/bass/drums nodes land with their generators. */
-enum class ChannelId : int { source = 0, chords, bass, drums };
-inline constexpr int numChannelIds = 4;
+/** Mixer channels. Wired: `source` and the four stems (model order, see stemChannel()); chords/bass/drums
+    nodes land with their generators. */
+enum class ChannelId : int { source = 0, chords, bass, drums, stemDrums, stemBass, stemOther, stemVocals };
+inline constexpr int numChannelIds = 8;
+
+/** Stem index in model order (0 drums, 1 bass, 2 other, 3 vocals) -> its mixer channel. */
+constexpr ChannelId stemChannel (int stemIndex) noexcept { return (ChannelId) ((int) ChannelId::stemDrums + stemIndex); }
 
 /** Owns the audio device and the processing graph.
 
-    Graph (M1):   [SourcePlayer] -> [Strip: source] -> [Master] -> [Audio out]
+    Graph:        [SourcePlayer] ch 0-1 -> [Strip: source]      -> [Master] -> [Audio out]
+                                 ch 2-9 -> [Strip: stem s] x 4  -> [Master]
     Later:        [Chord synth] / [Bass synth] / [Drums] -> [Strip] -> FX -> [Master]
+
+    While stems are loaded the source strip is muted (the stems replace it) unless it is soloed.
 
     Threading:
       - message thread: device setup, transport commands, gain/mute/solo (all lock-free into RT)
@@ -48,6 +55,12 @@ public:
 
     // --- mixer / transport (message thread) -----------------------------------------------
     SourcePlayerProcessor& getSourcePlayer() noexcept { return *sourcePlayer; }
+    /** Stems of the current source (8 channels: stem s, channel c -> 2s+c; same length), or
+        nullptr to go back to the source. */
+    bool setStems (std::shared_ptr<const juce::AudioBuffer<float>> stems);
+    /** New source (drops its stems). Use this rather than getSourcePlayer().setSource(). */
+    bool setSource (std::shared_ptr<const juce::AudioBuffer<float>> source);
+    bool hasStems() const noexcept { return stemsLoaded; }
     void setChannelGainDecibels (ChannelId, float dB);
     void setChannelMute (ChannelId, bool);
     void setChannelSolo (ChannelId, bool);
@@ -78,6 +91,7 @@ private:
 
     std::array<bool, numChannelIds> mutes {};
     std::array<bool, numChannelIds> solos {};
+    bool stemsLoaded = false;
 
     juce::AudioBuffer<float> scratch;
     juce::MidiBuffer midiScratch;

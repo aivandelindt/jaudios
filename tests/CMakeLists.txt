@@ -41,7 +41,8 @@ endif()
 add_executable(jaudios_golden_tests TestMain.cpp golden/test_goldens.cpp)
 target_link_libraries(jaudios_golden_tests PRIVATE Catch2::Catch2 app_core test_support jaudios_warnings)
 add_test(NAME render_missing_fixtures COMMAND fixture-render ${PROJECT_SOURCE_DIR}/tests/fixtures)
-set_tests_properties(render_missing_fixtures PROPERTIES FIXTURES_SETUP golden_audio)
+# stems_inputs: fixtures + (with JAUDIOS_ML_PYTHON) the demucs references, for jaudios_stems_tests
+set_tests_properties(render_missing_fixtures PROPERTIES FIXTURES_SETUP "golden_audio;stems_inputs")
 catch_discover_tests(jaudios_golden_tests DISCOVERY_MODE PRE_TEST
                      PROPERTIES FIXTURES_REQUIRED golden_audio ENVIRONMENT "${JAUDIOS_TEST_ENV}")
 
@@ -55,7 +56,7 @@ catch_discover_tests(jaudios_ml_golden_tests DISCOVERY_MODE PRE_TEST
 add_executable(jaudios_stems_tests TestMain.cpp golden/test_stems_golden.cpp)
 target_link_libraries(jaudios_stems_tests PRIVATE Catch2::Catch2 app_core test_support jaudios_warnings)
 catch_discover_tests(jaudios_stems_tests DISCOVERY_MODE PRE_TEST
-                     PROPERTIES FIXTURES_REQUIRED "golden_audio;demucs_reference" ENVIRONMENT "${JAUDIOS_TEST_ENV}")
+                     PROPERTIES FIXTURES_REQUIRED stems_inputs ENVIRONMENT "${JAUDIOS_TEST_ENV}")
 if(JAUDIOS_WITH_ONNXRUNTIME)
     jaudios_copy_onnxruntime(jaudios_stems_tests)
 endif()
@@ -63,7 +64,7 @@ endif()
 if(JAUDIOS_ML_PYTHON)
     add_test(NAME demucs_reference
              COMMAND ${JAUDIOS_ML_PYTHON} ${PROJECT_SOURCE_DIR}/ml/tests/demucs_reference.py ${JAUDIOS_DEMUCS_REFERENCE_DIR})
-    set_tests_properties(demucs_reference PROPERTIES FIXTURES_SETUP demucs_reference FIXTURES_REQUIRED golden_audio)
+    set_tests_properties(demucs_reference PROPERTIES FIXTURES_SETUP stems_inputs FIXTURES_REQUIRED golden_audio)
 
     set(_fixture_wavs)
     foreach(name house_124_Amin techno_132_Fmin pop_100_Cmaj loop_8bar_Gmaj stem_bass_Dmin)

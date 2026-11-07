@@ -236,3 +236,22 @@ TEST_CASE ("StemSeparator: 48 kHz mono input gives stereo stems at 48 kHz, input
     INFO ("null residual " << residual << " dBFS");
     CHECK (residual < -30.0); // resampled twice; a pure tone must still come back
 }
+
+TEST_CASE ("StemSeparator with the CoreML execution provider matches PyTorch", "[stems][onnx][coreml][golden][!mayfail]")
+{
+   #if ! JUCE_MAC
+    SKIP ("CoreML is macOS only");
+   #else
+    REQUIRE_MODEL();
+    REQUIRE_REF ("demucs_loop.npy");
+    StemSeparator sep ({ devModel(), true });
+    REQUIRE (sep.isReady());
+    const auto ref = test::readNpy (refFile ("demucs_loop.npy"));
+    REQUIRE (ref);
+    const auto r = sep.separate (loadFixture ("loop_8bar_Gmaj"), 44100.0);
+    REQUIRE (r.stems);
+    const auto [maxDiff, snr] = compare (*r.stems, *ref);
+    WARN ("CoreML (" << sep.executionProvider() << "): SNR vs PyTorch " << snr << " dB, max |d| " << maxDiff << ", " << r.seconds << " s");
+    CHECK (snr > 60.0); // until this passes on Apple Silicon, CPU stays the default
+   #endif
+}

@@ -149,3 +149,105 @@ TEST_CASE ("Demucs provenance: accepted only when it matches file, pins and pari
         CHECK (why.contains ("checkpoint"));
     }
 }
+
+//==============================================================================
+#include "engine/analysis/stems/StemCache.h"
+
+namespace
+{
+Stems makeStems (int n, double sr = 44100.0)
+{
+    Stems st;
+    st.sampleRate = sr;
+    for (int s = 0; s < numStems; ++s)
+    {
+        st.buffers[(size_t) s].setSize (2, n);
+        for (int ch = 0; ch < 2; ++ch)
+            for (int i = 0; i < n; ++i)
+                st.buffers[(size_t) s].setSample (ch, i, (float) (s + 1) * 0.1f + (float) ch * 0.01f + (float) i * 1e-6f);
+    }
+    return st;
+}
+} // namespace
+
+TEST_CASE ("Guide selection defaults to other + vocals and parses names", "[stems][guide]")
+{
+    const GuideSelection def;
+    CHECK (def.toString() == "other+vocals");
+    CHECK_FALSE (def.includes (Stem::drums));
+    CHECK (GuideSelection::fromString ("bass")->toString() == "bass");
+    CHECK (GuideSelection::fromString ("Vocals+bass")->toString() == "bass+vocals");
+    CHECK (GuideSelection::fromString ("all")->toString() == "drums+bass+other+vocals");
+    CHECK_FALSE (GuideSelection::fromString ("piano").has_value());
+    CHECK_FALSE (GuideSelection::fromString ("").has_value());
+
+    const auto st = makeStems (100);
+    const auto guide = mixGuide (st);
+    REQUIRE (guide.getNumChannels() == 2);
+    REQUIRE (guide.getNumSamples() == 100);
+    CHECK (guide.getSample (1, 50) == st[Stem::other].getSample (1, 50) + st[Stem::vocals].getSample (1, 50));
+}
+
+TEST_CASE ("packStems lays stems out as 2s+c for the engine", "[stems]")
+{
+    const auto st = makeStems (64);
+    const auto packed = packStems (st);
+    REQUIRE (packed.getNumChannels() == 8);
+    REQUIRE (packed.getNumSamples() == 64);
+    for (int s = 0; s < numStems; ++s)
+        for (int ch = 0; ch < 2; ++ch)
+            CHECK (packed.getSample (2 * s + ch, 10) == st.buffers[(size_t) s].getSample (ch, 10));
+}
+
+TEST_CASE ("Stem cache: key, exact round trip, misses and pruning", "[stems][cache]")
+{
+    test::TempDir tmp;
+    const StemCache cache (tmp.dir.getChildFile ("stems"));
+
+    juce::AudioBuffer<float> mix (2, 1000);
+    for (int i = 0; i < 1000; ++i)
+        for (int ch = 0; ch < 2; ++ch)
+            mix.setSample (ch, i, std::sin (0.01f * (float) i + (float) ch));
+
+    const auto key = StemCache::keyFor (mix, 44100.0, "model-a");
+    CHECK (key.length() == 64);
+    CHECK (key == StemCache::keyFor (mix, 44100.0, "model-a"));
+    CHECK (key != StemCache::keyFor (mix, 48000.0, "model-a"));
+    CHECK (key != StemCache::keyFor (mix, 44100.0, "model-b"));
+    auto changed = mix;
+    changed.setSample (1, 999, changed.getSample (1, 999) + 1e-6f);
+    CHECK (key != StemCache::keyFor (changed, 44100.0, "model-a"));
+
+    CHECK_FALSE (cache.load (key).has_value());
+    const auto st = makeStems (1000, 44100.0);
+    REQUIRE (cache.store (key, st));
+    const auto back = cache.load (key);
+    REQUIRE (back.has_value());
+    CHECK (back->sampleRate == 44100.0);
+    for (int s = 0; s < numStems; ++s)
+        for (int ch = 0; ch < 2; ++ch)
+            for (int i = 0; i < 1000; ++i)
+                REQUIRE (back->buffers[(size_t) s].getSample (ch, i) == st.buffers[(size_t) s].getSample (ch, i));
+    // nothing left behind but the entry
+    CHECK (cache.directory().findChildFiles (juce::File::findDirectories, false).size() == 1);
+
+    SECTION ("truncated data is a miss")
+    {
+        const auto data = cache.directory().getChildFile (key).getChildFile ("stems.f32");
+        juce::MemoryBlock mb;
+        data.loadFileAsData (mb);
+        data.replaceWithData (mb.getData(), mb.getSize() - 4);
+        CHECK_FALSE (cache.load (key).has_value());
+    }
+    SECTION ("not a key") { CHECK_FALSE (cache.load ("../etc").has_value()); }
+    SECTION ("prune keeps the most recently used entry")
+    {
+        const auto key2 = StemCache::keyFor (changed, 44100.0, "model-a");
+        REQUIRE (cache.store (key2, st));
+        cache.directory().getChildFile (key).getChildFile ("meta.json").setLastModificationTime (juce::Time::getCurrentTime() - juce::RelativeTime::hours (1));
+        const auto entryBytes = (juce::int64) 1000 * 8 * 4;
+        CHECK (cache.prune (entryBytes + 4096) == 1);
+        CHECK_FALSE (cache.load (key).has_value());
+        CHECK (cache.load (key2).has_value());
+    }
+}

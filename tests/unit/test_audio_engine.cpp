@@ -139,3 +139,110 @@ TEST_CASE ("Audio path performs zero allocations in realtime sections", "[scaffo
         WARN ("mutex locks on audio thread: " << report.rtStats.mutexLocks);
     }
 }
+
+namespace
+{
+/** Renders `n` samples through a prepared engine (fixed 128-sample device blocks). */
+juce::AudioBuffer<float> renderEngine (AudioEngine& engine, int n)
+{
+    juce::AudioBuffer<float> out (2, n), block (2, 128);
+    for (int pos = 0; pos < n; pos += 128)
+    {
+        const int m = std::min (128, n - pos);
+        engine.renderBlock (block.getArrayOfWritePointers(), 2, m);
+        for (int ch = 0; ch < 2; ++ch)
+            out.copyFrom (ch, pos, block, ch, 0, m);
+    }
+    return out;
+}
+} // namespace
+
+TEST_CASE ("AudioEngine plays stems in place of the source, with per-stem solo/mute/gain", "[engine][stems]")
+{
+    constexpr int n = 8192;
+    auto source = std::make_shared<juce::AudioBuffer<float>> (2, n);
+    auto stems = std::make_shared<juce::AudioBuffer<float>> (8, n);
+    for (int ch = 0; ch < 2; ++ch)
+        juce::FloatVectorOperations::fill (source->getWritePointer (ch), 1.0f, n); // must not be heard
+    const float level[] = { 0.1f, 0.02f, 0.004f, 0.0008f };                    // drums, bass, other, vocals
+    for (int s = 0; s < 4; ++s)
+        for (int ch = 0; ch < 2; ++ch)
+            juce::FloatVectorOperations::fill (stems->getWritePointer (2 * s + ch), level[s], n);
+
+    AudioEngine engine;
+    engine.prepareOffline (44100.0, 128);
+    REQUIRE (engine.setSource (source));
+    REQUIRE (engine.setStems (stems));
+    CHECK (engine.hasStems());
+    CHECK (stemChannel (3) == ChannelId::stemVocals);
+
+    float expected = 0.1f + 0.02f + 0.004f + 0.0008f;
+    SECTION ("all stems, source replaced") {}
+    SECTION ("solo other")
+    {
+        engine.setChannelSolo (stemChannel (2), true);
+        expected = 0.004f;
+    }
+    SECTION ("mute drums, bass -6 dB")
+    {
+        engine.setChannelMute (ChannelId::stemDrums, true);
+        engine.setChannelGainDecibels (ChannelId::stemBass, -6.0f);
+        expected = 0.02f * juce::Decibels::decibelsToGain (-6.0f) + 0.004f + 0.0008f;
+    }
+    SECTION ("soloing the source plays the source")
+    {
+        engine.setChannelSolo (ChannelId::source, true);
+        expected = 1.0f;
+    }
+
+    // the gain smoother starts at the strip's state when prepared; check after the 20 ms ramp
+    engine.getSourcePlayer().play();
+    const auto out = renderEngine (engine, n);
+    CHECK_THAT (out.getSample (0, n - 1), WithinAbs (expected, 1e-5));
+    CHECK_THAT (out.getSample (1, n - 1), WithinAbs (expected, 1e-5));
+}
+
+TEST_CASE ("AudioEngine: a new source drops the stems and un-mutes the source", "[engine][stems]")
+{
+    constexpr int n = 4096;
+    auto source = std::make_shared<juce::AudioBuffer<float>> (2, n);
+    for (int ch = 0; ch < 2; ++ch)
+        juce::FloatVectorOperations::fill (source->getWritePointer (ch), 0.25f, n);
+    auto stems = std::make_shared<juce::AudioBuffer<float>> (8, n);
+    stems->clear();
+
+    AudioEngine engine;
+    engine.prepareOffline (44100.0, 128);
+    engine.setSource (source);
+    engine.setStems (stems);
+    engine.setSource (source);
+    CHECK_FALSE (engine.hasStems());
+    engine.getSourcePlayer().play();
+    const auto out = renderEngine (engine, n);
+    CHECK_THAT (out.getSample (0, n - 1), WithinAbs (0.25, 1e-6));
+}
+
+TEST_CASE ("Stem playback performs zero allocations in realtime sections", "[engine][stems][rt]")
+{
+    if (! rt::isTrapInstalled())
+        SKIP ("realtime trap not linked; run tools/rt_check.sh");
+    constexpr int n = 44100;
+    auto source = test::makeSine (2, n, 440.0, 44100.0);
+    auto stems = std::make_shared<juce::AudioBuffer<float>> (8, n);
+    for (int c = 0; c < 8; ++c)
+        stems->copyFrom (c, 0, *source, c % 2, 0, n);
+
+    AudioEngine engine;
+    engine.prepareOffline (44100.0, 128);
+    engine.setSource (source);
+    engine.setStems (stems);
+    engine.setChannelSolo (ChannelId::stemVocals, true);
+    engine.getSourcePlayer().play();
+
+    juce::AudioBuffer<float> block (2, 128);
+    rt::resetStats();
+    for (int pos = 0; pos < n; pos += 128)
+        engine.renderBlock (block.getArrayOfWritePointers(), 2, 128);
+    CHECK (rt::getStats().allocations == 0);
+    CHECK (rt::getStats().deallocations == 0);
+}

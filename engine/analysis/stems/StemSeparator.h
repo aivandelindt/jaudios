@@ -30,6 +30,23 @@ struct Stems
     int getNumSamples() const noexcept { return buffers[0].getNumSamples(); }
 };
 
+/** 8-channel buffer for AudioEngine::setStems: stem s (model order), channel c -> channel 2s+c. */
+juce::AudioBuffer<float> packStems (const Stems&);
+
+/** Which stems feed the harmonic analysis ("guide"; stem-separation skill: default other + vocals). */
+struct GuideSelection
+{
+    std::array<bool, numStems> use { false, false, true, true }; // drums, bass, other, vocals
+
+    bool includes (Stem s) const noexcept { return use[(size_t) s]; }
+    bool empty() const noexcept { return ! (use[0] || use[1] || use[2] || use[3]); }
+    juce::String toString() const;                                   // "other+vocals"
+    static std::optional<GuideSelection> fromString (const juce::String&); // "other+vocals", "bass", "all"
+};
+
+/** Sum of the selected stems (stereo, stems' length and rate). Empty selection -> silence. */
+juce::AudioBuffer<float> mixGuide (const Stems&, const GuideSelection& = {});
+
 struct SeparatorConfig
 {
     juce::File modelFile;          // htdemucs.onnx (sha256 vs models/manifest.json, or verified provenance)
@@ -62,6 +79,8 @@ public:
     const juce::String& loadError() const noexcept { return error; }
     const juce::String& executionProvider() const noexcept { return provider; }
     const juce::String& modelOrigin() const noexcept { return origin; } // "canonical" / "local export (<platform>)"
+    /** Identifies what separate() computes (model sha256 + settings): part of the stem cache key. */
+    juce::String cacheId() const;
 
     struct Result
     {
@@ -90,7 +109,7 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl;
     SeparatorConfig config;
-    juce::String error, provider, origin;
+    juce::String error, provider, origin, modelSha;
     std::atomic<bool> cancelRequested { false };
 };
 

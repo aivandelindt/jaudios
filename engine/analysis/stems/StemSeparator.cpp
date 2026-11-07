@@ -42,6 +42,70 @@ std::optional<Stem> stemFromName (const juce::String& name)
     return std::nullopt;
 }
 
+juce::AudioBuffer<float> packStems (const Stems& stems)
+{
+    juce::AudioBuffer<float> out (2 * numStems, stems.getNumSamples());
+    for (int s = 0; s < numStems; ++s)
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            const auto& b = stems.buffers[(size_t) s];
+            out.copyFrom (2 * s + ch, 0, b, std::min (ch, b.getNumChannels() - 1), 0, out.getNumSamples());
+        }
+    return out;
+}
+
+juce::String GuideSelection::toString() const
+{
+    juce::StringArray names;
+    for (auto s : allStems)
+        if (includes (s))
+            names.add (stemName (s));
+    return names.joinIntoString ("+");
+}
+
+std::optional<GuideSelection> GuideSelection::fromString (const juce::String& text)
+{
+    GuideSelection g;
+    g.use.fill (false);
+    if (text.trim().equalsIgnoreCase ("all"))
+    {
+        g.use.fill (true);
+        return g;
+    }
+    juce::StringArray parts;
+    parts.addTokens (text, "+,", {});
+    parts.removeEmptyStrings();
+    if (parts.isEmpty())
+        return std::nullopt;
+    for (const auto& p : parts)
+    {
+        const auto s = stemFromName (p);
+        if (! s)
+            return std::nullopt;
+        g.use[(size_t) *s] = true;
+    }
+    return g;
+}
+
+juce::AudioBuffer<float> mixGuide (const Stems& stems, const GuideSelection& selection)
+{
+    juce::AudioBuffer<float> out (2, stems.getNumSamples());
+    out.clear();
+    for (auto s : allStems)
+        if (selection.includes (s))
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                const auto& b = stems[s];
+                out.addFrom (ch, 0, b, std::min (ch, b.getNumChannels() - 1), 0, out.getNumSamples());
+            }
+    return out;
+}
+
+juce::String StemSeparator::cacheId() const
+{
+    return "htdemucs/" + modelSha + "/overlap=" + juce::String (config.overlap, 3) + "/shifts=0";
+}
+
 juce::String StemSeparator::expectedModelSha256()
 {
    #ifdef JAUDIOS_HTDEMUCS_ONNX_SHA256
@@ -131,6 +195,7 @@ StemSeparator::StemSeparator (SeparatorConfig c) : config (std::move (c))
 
     auto t0 = juce::Time::getMillisecondCounterHiRes();
     const juce::String got (util::Sha256::ofFile (config.modelFile.getFullPathName().toStdString()));
+    modelSha = got;
     if (const auto expected = expectedModelSha256(); expected.isNotEmpty() && got == expected)
         origin = "canonical";
     else

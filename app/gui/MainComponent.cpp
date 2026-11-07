@@ -133,7 +133,7 @@ void MainComponent::onImported (ImportJobResult r)
                  + juce::String (c.originalNumChannels) + " ch, " + juce::String (c.durationSeconds(), 2) + " s";
 
     engine.getSourcePlayer().stop();
-    engine.getSourcePlayer().setSource (std::make_shared<const juce::AudioBuffer<float>> (std::move (c.buffer)));
+    engine.setSource (std::make_shared<const juce::AudioBuffer<float>> (std::move (c.buffer)));
     waveform.setPeaks (std::move (r.peaks));
 
     if (r.analysis)

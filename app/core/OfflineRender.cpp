@@ -20,7 +20,7 @@ OfflineRenderReport renderThroughEngine (AudioEngine& engine, std::shared_ptr<co
 
     const int length = source->getNumSamples();
     auto& player = engine.getSourcePlayer();
-    player.setSource (source);
+    engine.setSource (source);
     player.play();
 
     report.output.setSize (2, length);
@@ -57,7 +57,7 @@ OfflineRenderReport renderThroughEngine (AudioEngine& engine, std::shared_ptr<co
     }
 
     player.stop();
-    player.setSource (nullptr);
+    engine.setSource (nullptr);
     engine.renderBlock (deviceBuffer.getArrayOfWritePointers(), 2, 1); // let the player retire the buffer
     player.collectGarbage();
 

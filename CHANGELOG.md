@@ -24,6 +24,19 @@
   stems vs mix) -46.7 / -41.1 dBFS RMS, the same as upstream's own output (skill threshold -40 dBFS).
 - `app-cli separate <file> [--out DIR]`: stems as 32-bit float WAVs + JSON report (segments, time, realtime factor,
   null residual, per-stem RMS). house_124_Amin (62 s): 11 segments in 29 s on 4 x86-64 vCPUs, null -44.1 dBFS.
+- `StemCache`: stems cached in `~/Library/Application Support/JAudios/cache/stems/<sha256>/` (raw float32 + meta),
+  key = SHA-256 of the decoded audio + `StemSeparator::cacheId()` (model sha256 + settings); atomic writes (temp dir
+  + rename), corrupt/truncated entries are misses, LRU `prune()` to 4 GiB. `app-cli separate` uses it
+  (`--no-cache`, `JAUDIOS_STEM_CACHE_DIR`); a second run of the loop is a hit (0 segments).
+- Guide stems: `GuideSelection` (default `other+vocals`, parse/print `bass+vocals`, `all`) and `mixGuide()`;
+  `app-cli separate --guide ...` writes `guide.wav`.
+- Engine: `SourcePlayerProcessor` plays the source and its stems on one transport (10 output channels: source +
+  4 stereo stem layers; stems swapped in through the existing lock-free ownership protocol). Four stem strips
+  (`ChannelId::stemDrums..stemVocals`, `stemChannel()`) with gain / mute / solo into the master; the source is
+  muted while stems are loaded unless soloed. `AudioEngine::setSource()` / `setStems()`; a new source drops its
+  stems. `[rt]` test: zero allocations while playing stems (`tools/rt_check.sh` PASS).
+- macOS CI: exports HT-Demucs on the Mac (parity vs PyTorch), runs the stem goldens, a CoreML golden
+  (`[!mayfail]`) and a 3-minute separation with its timing and null test; docs/building-macos.md section 3b.
 
 ### macOS (Apple Silicon)
 - Fix: on macOS the ONNX Runtime dylib was staged as `libonnxruntime.dylib`, but its install name is

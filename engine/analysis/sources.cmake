@@ -20,4 +20,5 @@ set(ENGINE_ANALYSIS_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/../util/Sha256.cpp
     # stem-separation (HT-Demucs via ONNX Runtime)
     ${CMAKE_CURRENT_LIST_DIR}/stems/DemucsSpec.cpp
-    ${CMAKE_CURRENT_LIST_DIR}/stems/StemSeparator.cpp)
+    ${CMAKE_CURRENT_LIST_DIR}/stems/StemSeparator.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/stems/StemCache.cpp)

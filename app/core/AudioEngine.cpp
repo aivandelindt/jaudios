@@ -12,10 +12,10 @@ using IO = Graph::AudioGraphIOProcessor;
 
 static constexpr auto syncUpdate = Graph::UpdateKind::sync;
 
-static void connectStereo (Graph& g, Graph::NodeID from, Graph::NodeID to)
+static void connectStereo (Graph& g, Graph::NodeID from, Graph::NodeID to, int fromChannel = 0)
 {
     for (int ch = 0; ch < 2; ++ch)
-        g.addConnection ({ { from, ch }, { to, ch } }, syncUpdate);
+        g.addConnection ({ { from, fromChannel + ch }, { to, ch } }, syncUpdate);
 }
 
 AudioEngine::AudioEngine()
@@ -35,7 +35,36 @@ AudioEngine::AudioEngine()
 
     connectStereo (graph, sourceNode->nodeID, sourceStrip->nodeID);
     connectStereo (graph, sourceStrip->nodeID, masterNode->nodeID);
+
+    static const char* stemNames[] = { "Drums stem", "Bass stem", "Other stem", "Vocals stem" };
+    for (int s = 0; s < SourcePlayerProcessor::numStemLayers; ++s)
+    {
+        auto strip = graph.addNode (std::make_unique<ChannelStripProcessor> (stemNames[s]), {}, syncUpdate);
+        strips[(size_t) stemChannel (s)] = static_cast<ChannelStripProcessor*> (strip->getProcessor());
+        connectStereo (graph, sourceNode->nodeID, strip->nodeID, 2 + 2 * s);
+        connectStereo (graph, strip->nodeID, masterNode->nodeID);
+    }
+
     connectStereo (graph, masterNode->nodeID, outNode->nodeID);
+}
+
+bool AudioEngine::setSource (std::shared_ptr<const juce::AudioBuffer<float>> source)
+{
+    if (! sourcePlayer->setSource (std::move (source)))
+        return false;
+    stemsLoaded = false;
+    updateEffectiveMutes();
+    return true;
+}
+
+bool AudioEngine::setStems (std::shared_ptr<const juce::AudioBuffer<float>> stems)
+{
+    const bool loaded = stems != nullptr;
+    if (! sourcePlayer->setStems (std::move (stems)))
+        return false;
+    stemsLoaded = loaded;
+    updateEffectiveMutes();
+    return true;
 }
 
 AudioEngine::~AudioEngine()
@@ -187,9 +216,12 @@ void AudioEngine::updateEffectiveMutes()
 {
     const bool anySolo = std::any_of (solos.begin(), solos.end(), [] (bool s) { return s; });
 
+    const auto source = (size_t) ChannelId::source;
     for (size_t i = 0; i < strips.size(); ++i)
         if (auto* strip = strips[i])
-            strip->setEffectiveMute (mutes[i] || (anySolo && ! solos[i]));
+            strip->setEffectiveMute (mutes[i] || (anySolo && ! solos[i])
+                                     || (i == source && stemsLoaded && ! solos[i])); // stems replace the source
+
 }
 
 double AudioEngine::getOutputLatencyMs() const

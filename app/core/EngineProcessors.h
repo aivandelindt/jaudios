@@ -46,7 +46,12 @@ protected:
 };
 
 //==============================================================================
-/** Plays an in-memory buffer (the imported/captured source, later: stems).
+/** Plays an in-memory buffer (the imported/captured source) and, once separated, its stems, all
+    on one transport so they stay sample-aligned.
+
+    Output: 10 channels = 5 stereo layers. Channels 0-1: the source; 2+2s / 3+2s: stem s in model
+    order (drums, bass, other, vocals). The stems buffer has 8 channels (stem s, channel c ->
+    channel 2s+c) and the source's length; layers without data output silence.
 
     Ownership protocol (no allocation or freeing on the audio thread):
       - The message thread keeps every buffer alive in `owned` and sends a raw pointer to the
@@ -63,8 +68,15 @@ public:
 
     const juce::String getName() const override { return "Source"; }
 
+    static constexpr int numStemLayers = 4;
+    static constexpr int numOutputChannels = 2 + 2 * numStemLayers;
+
     // --- message thread -------------------------------------------------------------------
+    /** New source: also drops the current stems (they belonged to the old source). */
     bool setSource (std::shared_ptr<const Buffer> buffer);
+    /** Stems of the current source (8 channels, see above), or nullptr to remove them. Keeps the
+        transport position. */
+    bool setStems (std::shared_ptr<const Buffer> stems);
     bool play();
     bool stop();
     bool seek (juce::int64 samplePosition);
@@ -80,13 +92,15 @@ public:
 private:
     struct Command
     {
-        enum class Type { setSource, play, stop, seek };
+        enum class Type { setSource, setStems, play, stop, seek };
         Type type = Type::stop;
         const Buffer* buffer = nullptr;
         juce::int64 position = 0;
     };
 
     void handleCommands() noexcept;
+    bool keep (std::shared_ptr<const Buffer>);
+    void retire (const Buffer*& slot) noexcept;
 
     SpscQueue<Command, 64> commands;
     SpscQueue<const Buffer*, 64> retired;
@@ -94,6 +108,7 @@ private:
     std::vector<std::shared_ptr<const Buffer>> owned; // message thread only
 
     const Buffer* current = nullptr; // audio thread only
+    const Buffer* stems = nullptr;   // audio thread only
     juce::int64 readPosition = 0;    // audio thread only
     bool playing = false;            // audio thread only
 
