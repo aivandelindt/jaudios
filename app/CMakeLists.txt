@@ -3,6 +3,7 @@ add_library(app_core STATIC
     core/AnalysisService.cpp
     core/AudioEngine.cpp
     core/EngineProcessors.cpp
+    core/HarmonySource.cpp
     core/OfflineRender.cpp
     core/RealtimeTrap.cpp)
 target_include_directories(app_core PUBLIC ${PROJECT_SOURCE_DIR})

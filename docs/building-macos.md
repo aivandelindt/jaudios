@@ -48,7 +48,7 @@ Outputs:
 |---|---|
 | App | `build/app/JAudios_artefacts/Release/JAudios.app` |
 | CLI harness | `build/tools/cli/app-cli_artefacts/Release/app-cli` |
-| Tests | `build/tests/jaudios_tests`, `build/tests/jaudios_golden_tests`, `build/tests/jaudios_ml_golden_tests`, `build/tests/jaudios_stems_tests`, `build/tests/jaudios_transcription_tests` |
+| Tests | `build/tests/jaudios_tests`, `build/tests/jaudios_golden_tests`, `build/tests/jaudios_ml_golden_tests`, `build/tests/jaudios_stems_tests`, `build/tests/jaudios_transcription_tests`, `build/tests/jaudios_chords_tests` |
 
 The ONNX Runtime dylib is copied into `JAudios.app/Contents/Frameworks/` automatically.
 
@@ -190,6 +190,21 @@ ML environment. `--no-deps` keeps TensorFlow out; Basic Pitch runs its ONNX mode
 ```bash
 ~/.venvs/jaudios-ml/bin/pip install --no-deps basic-pitch==0.4.0 mir_eval==0.8.2 pretty_midi==0.2.11.post0 mido==1.3.3 resampy==0.4.2 setuptools==75.8.0 decorator==5.3.1 six==1.17.0 importlib_resources==7.1.0
 ```
+
+## 3d. Chord suggestions
+
+The chord engine is rule-based (no model). It needs the audio-to-MIDI model from section 3c for the
+melody and bass evidence, and uses the key model if it is there:
+
+```bash
+build/tools/cli/app-cli_artefacts/Release/app-cli chords tests/fixtures/pop_100_Cmaj.wav --out /tmp/pop.chords.mid
+```
+
+It prints the 8 best progressions (chords, Roman numerals, score parts) and six alternatives for
+each of the first four chords, and writes the best one as MIDI. Options: `--style
+pop|house|techno|trance|lofi|rnb|cinematic`, `--rhythm 1|2|half` (chords per bar), `--sevenths`,
+`--stems` (melody from the guide stems and bass from the bass stem; needs section 3b),
+`--voicing close|open|drop2`, `--humanize 8`, `--seed N`, `--top N`.
 
 ## 4. Run
 

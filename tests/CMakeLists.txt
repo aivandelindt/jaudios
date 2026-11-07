@@ -63,6 +63,15 @@ if(JAUDIOS_WITH_ONNXRUNTIME)
     jaudios_copy_onnxruntime(jaudios_stems_tests)
 endif()
 
+# Chord engine on the fixtures vs their truth chords (needs build/models/basic_pitch.onnx).
+add_executable(jaudios_chords_tests TestMain.cpp golden/test_chords_golden.cpp)
+target_link_libraries(jaudios_chords_tests PRIVATE Catch2::Catch2 app_core test_support jaudios_warnings)
+catch_discover_tests(jaudios_chords_tests DISCOVERY_MODE PRE_TEST
+                     PROPERTIES FIXTURES_REQUIRED golden_audio ENVIRONMENT "${JAUDIOS_TEST_ENV}")
+if(JAUDIOS_WITH_ONNXRUNTIME)
+    jaudios_copy_onnxruntime(jaudios_chords_tests)
+endif()
+
 # AudioToMidi vs upstream basic-pitch (needs build/models/basic_pitch.onnx; references need JAUDIOS_ML_PYTHON).
 add_executable(jaudios_transcription_tests TestMain.cpp golden/test_transcription_golden.cpp)
 target_link_libraries(jaudios_transcription_tests PRIVATE Catch2::Catch2 app_core test_support jaudios_warnings)
