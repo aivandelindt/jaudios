@@ -246,3 +246,213 @@ TEST_CASE ("Stem playback performs zero allocations in realtime sections", "[eng
     CHECK (rt::getStats().allocations == 0);
     CHECK (rt::getStats().deallocations == 0);
 }
+
+//==============================================================================
+// synth-and-vst3-host: generated channels (clip player + instrument) on the engine's transport.
+#include "engine/synth/SfzInstrument.h"
+
+namespace
+{
+/** Test instrument: every note-on writes a single 1.0 impulse at its sample (left), nothing else. */
+struct ImpulseInstrument final : synth::Instrument
+{
+    juce::String name() const override { return "impulse"; }
+    void prepare (double, int) override { prepared = true; }
+    void process (juce::AudioBuffer<float>& out, const juce::MidiBuffer& midi) noexcept override
+    {
+        out.clear();
+        for (const auto m : midi)
+            if (m.getMessage().isNoteOn())
+                out.setSample (0, m.samplePosition, 1.0f);
+    }
+    void allNotesOff() noexcept override { ++notesOff; }
+    bool prepared = false;
+    int notesOff = 0;
+};
+
+std::shared_ptr<const MidiClip> clipAt (std::initializer_list<juce::int64> positions, int note = 60)
+{
+    auto c = std::make_shared<MidiClip>();
+    for (auto p : positions)
+        c->push_back ({ p, juce::MidiMessage::noteOn (1, note, (juce::uint8) 100) });
+    return c;
+}
+
+std::vector<int> impulses (const juce::AudioBuffer<float>& b, float threshold = 0.5f)
+{
+    std::vector<int> at;
+    for (int i = 0; i < b.getNumSamples(); ++i)
+        if (b.getSample (0, i) > threshold)
+            at.push_back (i);
+    return at;
+}
+} // namespace
+
+TEST_CASE ("Generated channel: clip notes land on their transport sample, in step with the source", "[engine][synth]")
+{
+    AudioEngine engine;
+    engine.prepareOffline (44100.0, 128);
+    // the source carries a click on the right channel at transport sample 22050, like the clip's note
+    auto silent = std::make_shared<juce::AudioBuffer<float>> (2, 44100);
+    silent->clear();
+    silent->setSample (1, 22050, 1.0f);
+    REQUIRE (engine.setSource (silent));
+    auto inst = std::make_shared<ImpulseInstrument>();
+    REQUIRE (engine.setChannelInstrument (ChannelId::chords, inst));
+    CHECK (inst->prepared);
+    REQUIRE (engine.setChannelClip (ChannelId::chords, clipAt ({ 0, 1000, 1001, 22050 })));
+    engine.play();
+    // device blocks of odd sizes: the engine renders in fixed graph blocks either way
+    juce::AudioBuffer<float> out (2, 44100), block (2, 300);
+    for (int pos = 0; pos < out.getNumSamples(); pos += 300)
+    {
+        const int n = std::min (300, out.getNumSamples() - pos);
+        engine.renderBlock (block.getArrayOfWritePointers(), 2, n);
+        for (int ch = 0; ch < 2; ++ch)
+            out.copyFrom (ch, pos, block, ch, 0, n);
+    }
+    CHECK (impulses (out) == std::vector<int> { 0, 1000, 1001, 22050 });
+
+    SECTION ("seek moves the clip with the source and silences hanging notes")
+    {
+        engine.seek (21950);
+        engine.play(); // the first pass played to the source's end, which stops the whole transport
+        const auto after = renderEngine (engine, 512);
+        // the engine serves device blocks from a fixed-size render-ahead block, so a seek takes effect
+        // after the samples already rendered; what matters is that clip and source move together
+        const auto clipHits = impulses (after);
+        REQUIRE (clipHits.size() == 1);
+        CHECK (after.getSample (1, clipHits[0]) > 0.5f); // the source's click on the same sample
+        CHECK (inst->notesOff >= 1);
+    }
+}
+
+TEST_CASE ("Generated channels mix in with gain; bypass mutes them and restores the mixer", "[engine][synth]")
+{
+    AudioEngine engine;
+    engine.prepareOffline (44100.0, 128);
+    auto silent = std::make_shared<juce::AudioBuffer<float>> (2, 8192);
+    silent->clear();
+    engine.setSource (silent);
+    auto inst = std::make_shared<ImpulseInstrument>();
+    engine.setChannelInstrument (ChannelId::bass, inst);
+    engine.setChannelClip (ChannelId::bass, clipAt ({ 4000 }));
+    engine.setChannelGainDecibels (ChannelId::bass, -6.0f);
+    engine.setChannelMute (ChannelId::chords, true); // user state that bypass must give back
+
+    SECTION ("normal: the impulse at -6 dB")
+    {
+        engine.play();
+        const auto out = renderEngine (engine, 8192);
+        CHECK_THAT (out.getSample (0, 4000), WithinAbs (juce::Decibels::decibelsToGain (-6.0f), 1e-4));
+    }
+    SECTION ("bypass: silent; leaving it plays the part again, chords still muted")
+    {
+        engine.setBypass (true);
+        CHECK (engine.isBypassed());
+        engine.play();
+        auto out = renderEngine (engine, 8192);
+        CHECK (out.getMagnitude (0, 0, 8192) == 0.0f);
+        engine.setBypass (false);
+        engine.seek (0);
+        engine.play(); // the transport stopped at the source's end
+        out = renderEngine (engine, 8192);
+        CHECK_THAT (out.getSample (0, 4000), WithinAbs (juce::Decibels::decibelsToGain (-6.0f), 1e-4));
+    }
+}
+
+TEST_CASE ("Built-in SFZ chords + drums through the engine graph", "[engine][synth][sfz]")
+{
+    AudioEngine engine;
+    engine.prepareOffline (44100.0, 128);
+    auto silent = std::make_shared<juce::AudioBuffer<float>> (2, 44100);
+    silent->clear();
+    engine.setSource (silent);
+    auto pad = std::make_shared<synth::SfzInstrument>();
+    REQUIRE (pad->load (*synth::findSfzPreset ("pluck")));
+    engine.setChannelInstrument (ChannelId::chords, pad);
+    engine.setChannelInstrument (ChannelId::drums, std::make_shared<synth::DrumInstrument>());
+    auto chord = std::make_shared<MidiClip>();
+    for (int n : { 60, 64, 67 })
+        chord->push_back ({ 0, juce::MidiMessage::noteOn (1, n, (juce::uint8) 100) });
+    for (int n : { 60, 64, 67 })
+        chord->push_back ({ 20000, juce::MidiMessage::noteOff (1, n) });
+    engine.setChannelClip (ChannelId::chords, chord);
+    engine.setChannelClip (ChannelId::drums, clipAt ({ 0, 11025 }, 36));
+    engine.play();
+    const auto out = renderEngine (engine, 44100);
+    CHECK (out.getMagnitude (0, 0, 4410) > 0.05f);
+    CHECK (out.getMagnitude (0, 11025, 2000) > 0.05f);
+}
+
+TEST_CASE ("Generated channels perform zero allocations in realtime sections", "[engine][synth][rt]")
+{
+    if (! rt::isTrapInstalled())
+        SKIP ("realtime trap not linked; run tools/rt_check.sh");
+    AudioEngine engine;
+    engine.prepareOffline (44100.0, 128);
+    auto source = test::makeSine (2, 44100, 220.0, 44100.0);
+    engine.setSource (source);
+    auto pad = std::make_shared<synth::SfzInstrument>();
+    REQUIRE (pad->load (*synth::findSfzPreset ("pad")));
+    engine.setChannelInstrument (ChannelId::chords, pad);
+    engine.setChannelInstrument (ChannelId::drums, std::make_shared<synth::DrumInstrument>());
+    auto chords = std::make_shared<MidiClip>();
+    for (juce::int64 t = 0; t < 44100; t += 5512)
+        for (int n : { 60, 64, 67 })
+        {
+            chords->push_back ({ t, juce::MidiMessage::noteOn (1, n, (juce::uint8) 90) });
+            chords->push_back ({ t + 4000, juce::MidiMessage::noteOff (1, n) });
+        }
+    std::stable_sort (chords->begin(), chords->end(), [] (const ClipEvent& a, const ClipEvent& b) { return a.position < b.position; });
+    engine.setChannelClip (ChannelId::chords, chords);
+    std::vector<juce::int64> kicks;
+    for (juce::int64 t = 0; t < 44100; t += 2756)
+        kicks.push_back (t);
+    auto drums = std::make_shared<MidiClip>();
+    for (auto t : kicks)
+        drums->push_back ({ t, juce::MidiMessage::noteOn (10, 36, (juce::uint8) 110) });
+    engine.setChannelClip (ChannelId::drums, drums);
+    engine.play();
+
+    juce::AudioBuffer<float> block (2, 128);
+    rt::resetStats();
+    for (int pos = 0; pos < 44100; pos += 128)
+        engine.renderBlock (block.getArrayOfWritePointers(), 2, 128);
+    CHECK (rt::getStats().allocations == 0);
+    CHECK (rt::getStats().deallocations == 0);
+}
+
+TEST_CASE ("The generated parts stop with the source at its end", "[engine][synth]")
+{
+    AudioEngine engine;
+    engine.prepareOffline (44100.0, 128);
+    auto silent = std::make_shared<juce::AudioBuffer<float>> (2, 1000);
+    silent->clear();
+    engine.setSource (silent);
+    auto inst = std::make_shared<ImpulseInstrument>();
+    engine.setChannelInstrument (ChannelId::chords, inst);
+    engine.setChannelClip (ChannelId::chords, clipAt ({ 500, 1500 })); // the second note is past the end
+    engine.play();
+    const auto out = renderEngine (engine, 4096);
+    CHECK (impulses (out) == std::vector<int> { 500 });
+    CHECK_FALSE (engine.getSourcePlayer().isPlaying());
+}
+
+TEST_CASE ("Bypass set before prepare: the very first samples are the source alone", "[engine][synth]")
+{
+    AudioEngine engine;
+    engine.setBypass (true);
+    engine.setChannelGainDecibels (ChannelId::source, -6.0f);
+    engine.prepareOffline (44100.0, 128);
+    auto source = test::makeSine (2, 4096, 440.0, 44100.0);
+    engine.setSource (source);
+    auto inst = std::make_shared<ImpulseInstrument>();
+    engine.setChannelInstrument (ChannelId::drums, inst);
+    engine.setChannelClip (ChannelId::drums, clipAt ({ 0, 10 }, 36));
+    engine.play();
+    const auto out = renderEngine (engine, 4096);
+    const float g = juce::Decibels::decibelsToGain (-6.0f);
+    for (int i = 0; i < 4096; ++i)
+        REQUIRE (std::abs (out.getSample (0, i) - g * source->getSample (0, i)) < 1e-6f);
+}

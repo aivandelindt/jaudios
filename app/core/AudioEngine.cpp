@@ -45,13 +45,78 @@ AudioEngine::AudioEngine()
         connectStereo (graph, strip->nodeID, masterNode->nodeID);
     }
 
+    static const char* generatedNames[] = { "Chords", "Bass", "Drums" };
+    for (int g = 0; g < 3; ++g)
+    {
+        const auto id = (ChannelId) ((int) ChannelId::chords + g);
+        auto player = graph.addNode (std::make_unique<ClipPlayerProcessor> (generatedNames[g]), {}, syncUpdate);
+        clipPlayers[(size_t) g] = static_cast<ClipPlayerProcessor*> (player->getProcessor());
+        auto strip = graph.addNode (std::make_unique<ChannelStripProcessor> (generatedNames[g]), {}, syncUpdate);
+        strips[(size_t) id] = static_cast<ChannelStripProcessor*> (strip->getProcessor());
+        connectStereo (graph, player->nodeID, strip->nodeID);
+        connectStereo (graph, strip->nodeID, masterNode->nodeID);
+    }
+
     connectStereo (graph, masterNode->nodeID, outNode->nodeID);
+}
+
+ClipPlayerProcessor* AudioEngine::clipPlayer (ChannelId id) const noexcept
+{
+    const int g = (int) id - (int) ChannelId::chords;
+    return g >= 0 && g < 3 ? clipPlayers[(size_t) g] : nullptr;
+}
+
+void AudioEngine::play()
+{
+    sourcePlayer->play();
+    for (auto* p : clipPlayers)
+        p->play();
+}
+
+void AudioEngine::stop()
+{
+    sourcePlayer->stop();
+    for (auto* p : clipPlayers)
+        p->stop();
+}
+
+void AudioEngine::seek (juce::int64 position)
+{
+    sourcePlayer->seek (position);
+    for (auto* p : clipPlayers)
+        p->seek (position);
+}
+
+bool AudioEngine::setChannelClip (ChannelId id, std::shared_ptr<const MidiClip> clip)
+{
+    auto* p = clipPlayer (id);
+    return p != nullptr && p->setClip (std::move (clip));
+}
+
+bool AudioEngine::setChannelInstrument (ChannelId id, std::shared_ptr<synth::Instrument> instrument)
+{
+    auto* p = clipPlayer (id);
+    if (p == nullptr)
+        return false;
+    if (instrument != nullptr)
+        instrument->prepare (preparedSampleRate > 0.0 ? preparedSampleRate : 44100.0,
+                             preparedBlockSize > 0 ? preparedBlockSize : defaultBlockSize);
+    return p->setInstrument (std::move (instrument));
+}
+
+void AudioEngine::setBypass (bool shouldBypass)
+{
+    bypassed = shouldBypass;
+    updateEffectiveMutes();
 }
 
 bool AudioEngine::setSource (std::shared_ptr<const juce::AudioBuffer<float>> source)
 {
+    const juce::int64 length = source != nullptr ? source->getNumSamples() : -1;
     if (! sourcePlayer->setSource (std::move (source)))
         return false;
+    for (auto* p : clipPlayers) // one transport: the generated parts end where the source ends
+        p->setLength (length);
     stemsLoaded = false;
     updateEffectiveMutes();
     return true;
@@ -219,8 +284,13 @@ void AudioEngine::updateEffectiveMutes()
     const auto source = (size_t) ChannelId::source;
     for (size_t i = 0; i < strips.size(); ++i)
         if (auto* strip = strips[i])
-            strip->setEffectiveMute (mutes[i] || (anySolo && ! solos[i])
-                                     || (i == source && stemsLoaded && ! solos[i])); // stems replace the source
+        {
+            if (bypassed) // the source alone, whatever the mixer says (restored when bypass ends)
+                strip->setEffectiveMute (i != source);
+            else
+                strip->setEffectiveMute (mutes[i] || (anySolo && ! solos[i])
+                                         || (i == source && stemsLoaded && ! solos[i])); // stems replace the source
+        }
 
 }
 

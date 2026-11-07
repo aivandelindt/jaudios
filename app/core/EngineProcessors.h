@@ -2,6 +2,8 @@
 
 #include "SpscQueue.h"
 
+#include "engine/synth/Instrument.h"
+
 #include <juce_audio_processors_headless/juce_audio_processors_headless.h>
 
 #include <atomic>
@@ -114,6 +116,76 @@ private:
 
     std::atomic<juce::int64> positionForUi { 0 };
     std::atomic<bool> playingForUi { false };
+};
+
+//==============================================================================
+/** A generated part (chords, bass, drums) as MIDI events on the transport's sample timeline (the
+    source buffer's samples), sorted by position. */
+struct ClipEvent
+{
+    juce::int64 position = 0;
+    juce::MidiMessage message;
+};
+using MidiClip = std::vector<ClipEvent>;
+
+/** Seconds-stamped MIDI (generators, transcription) -> a clip at `transportRate` samples/second. */
+MidiClip makeClip (const juce::MidiMessageSequence&, double transportRate);
+
+/** Plays a MidiClip through an Instrument on the same transport as the SourcePlayer (play / stop /
+    seek commands reach both from AudioEngine, so they advance block for block in step).
+    Clip and instrument swap with the SourcePlayer's ownership protocol: the message thread keeps
+    them alive and sends raw pointers through a lock-free queue; retired ones come back to be freed
+    by collectGarbage(). An instrument must be prepared before it is sent (AudioEngine does that). */
+class ClipPlayerProcessor final : public EngineProcessorBase
+{
+public:
+    explicit ClipPlayerProcessor (juce::String name);
+    const juce::String getName() const override { return name; }
+
+    // --- message thread -------------------------------------------------------------------
+    bool setClip (std::shared_ptr<const MidiClip>);
+    bool setInstrument (std::shared_ptr<synth::Instrument>);
+    bool play();
+    bool stop();
+    bool seek (juce::int64 position);
+    /** The source's length: like the SourcePlayer, playback stops when the transport reaches it
+        (same block arithmetic, so both stop on the same sample). -1 = no limit (no source). */
+    bool setLength (juce::int64 length);
+    void collectGarbage();
+    /** Instruments kept alive here (prepareToPlay re-prepares them for a new device setup). */
+    const std::vector<std::shared_ptr<synth::Instrument>>& instruments() const noexcept { return ownedInstruments; }
+
+    // --- audio thread ---------------------------------------------------------------------
+    void prepareToPlay (double sampleRate, int maxBlockSize) override;
+    void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+
+private:
+    struct Command
+    {
+        enum class Type { setClip, setInstrument, play, stop, seek, setLength };
+        Type type = Type::stop;
+        const MidiClip* clip = nullptr;
+        synth::Instrument* instrument = nullptr;
+        juce::int64 position = 0;
+    };
+    struct Retired { const MidiClip* clip = nullptr; synth::Instrument* instrument = nullptr; };
+
+    void handleCommands() noexcept;
+    void relocate() noexcept; // cursor = first event at or after readPosition
+
+    juce::String name;
+    SpscQueue<Command, 64> commands;
+    SpscQueue<Retired, 64> retired;
+    std::vector<std::shared_ptr<const MidiClip>> ownedClips;            // message thread only
+    std::vector<std::shared_ptr<synth::Instrument>> ownedInstruments;   // message thread only
+
+    const MidiClip* clip = nullptr;            // audio thread only
+    synth::Instrument* instrument = nullptr;   // audio thread only
+    juce::int64 readPosition = 0;
+    juce::int64 length = -1;
+    size_t cursor = 0;
+    bool playing = false;
+    juce::MidiBuffer blockMidi;                // reserved in prepareToPlay
 };
 
 //==============================================================================

@@ -1,0 +1,8 @@
+// name: Saw bass
+// category: bass
+// JAUDIOS preset: synthesised (sfizz oscillators), no samples. Resonant low-passed saw, filter pluck.
+<global>
+amp_veltrack=70 ampeg_attack=0.002 ampeg_decay=0.3 ampeg_sustain=70 ampeg_release=0.1
+fil_type=lpf_2p cutoff=350 resonance=6 fil_veltrack=1200 fileg_decay=0.25 fileg_sustain=25 fileg_depth=2200
+<region> sample=*saw oscillator_multi=2 oscillator_detune=6 volume=-8
+<region> sample=*sine transpose=-12 volume=-12

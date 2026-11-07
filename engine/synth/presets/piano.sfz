@@ -1,0 +1,10 @@
+// name: Soft piano
+// category: keys
+// JAUDIOS preset: synthesised (sfizz oscillators), no samples. Hammer-ish attack, velocity-bright.
+<global>
+amp_veltrack=90 ampeg_attack=0.002 ampeg_decay=2.8 ampeg_sustain=0 ampeg_release=0.35
+fil_type=lpf_2p cutoff=1400 fil_veltrack=3600 fil_keytrack=60 resonance=0.5
+fileg_decay=1.2 fileg_sustain=20 fileg_depth=1800
+<region> sample=*triangle volume=-6
+<region> sample=*sine transpose=12 volume=-14
+<region> sample=*saw volume=-26 ampeg_decay=0.4

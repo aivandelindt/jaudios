@@ -1,0 +1,8 @@
+// name: Pluck
+// category: pluck
+// JAUDIOS preset: synthesised (sfizz oscillators), no samples. Short saw with a snappy filter envelope.
+<global>
+amp_veltrack=80 ampeg_attack=0.001 ampeg_decay=0.45 ampeg_sustain=0 ampeg_release=0.2
+fil_type=lpf_2p cutoff=500 resonance=3 fil_veltrack=1800 fileg_decay=0.22 fileg_sustain=0 fileg_depth=3600
+<region> sample=*saw oscillator_multi=2 oscillator_detune=7 volume=-10
+<region> sample=*square transpose=12 volume=-22

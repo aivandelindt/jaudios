@@ -202,6 +202,13 @@ jobs:
             "$CLI" drums "tests/fixtures/$1.wav" --style "$2" --split --out "$RUNNER_TEMP/drums-$1" | python3 -c "import json,sys; d=json.load(sys.stdin); print('$1', d['pattern'], 'bars', d['bars'], 'kick error', d['kick_downbeat_max_error_ms'], 'ms', [f['stem'] for f in d['files']]); sys.exit(0 if d['kick_downbeat_max_error_ms'] < 5 else 1)"
           done
 
+      - name: Audition (generated chords + bass + drums on the built-in instruments, through the engine graph)
+        run: |
+          CLI=build/tools/cli/app-cli_artefacts/Release/app-cli
+          "$CLI" audition --list-presets | python3 -c "import json,sys; print([(c['category'], [p['id'] for p in c['presets']]) for c in json.load(sys.stdin)['categories']])"
+          "$CLI" audition tests/fixtures/house_124_Amin.wav --style house --out "$RUNNER_TEMP/house.audition.wav" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['progression'], d['chords_preset'], d['bass_preset'], d['drums'], d['notes'], 'x%.0f realtime' % d['realtime_factor'], 'peak %.2f' % d['peak']); sys.exit(0 if 0.05 < d['peak'] < 1.0 else 1)"
+          "$CLI" audition tests/fixtures/house_124_Amin.wav --bypass --out "$RUNNER_TEMP/house.bypass.wav" | python3 -c "import json,sys; d=json.load(sys.stdin); print('bypass peak %.3f' % d['peak']); sys.exit(0 if d['peak'] < 0.5 else 1)"
+
       - name: Stem separation with the CoreML execution provider (diagnostic)
         continue-on-error: true
         run: |

@@ -1,0 +1,7 @@
+// name: Sub bass
+// category: bass
+// JAUDIOS preset: synthesised (sfizz oscillators), no samples. Clean sine with a touch of triangle.
+<global>
+amp_veltrack=60 ampeg_attack=0.004 ampeg_decay=0.2 ampeg_sustain=90 ampeg_release=0.12
+<region> sample=*sine volume=-3
+<region> sample=*triangle volume=-20
