@@ -23,6 +23,8 @@ public:
 
     TimelineModel& timeline() noexcept { return model; }
     ChordLane& chordLane() noexcept { return chords; }
+    BassLane& bassLane() noexcept { return bass; }
+    DrumLane& drumLane() noexcept { return drums; }
     ExportTiles& exportTiles() noexcept { return tiles; }
     PlayheadOverlay& playhead() noexcept { return overlay; }
     ChannelHeader& header (ChannelId);

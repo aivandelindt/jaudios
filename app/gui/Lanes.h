@@ -71,21 +71,56 @@ private:
     void paintContent (juce::Graphics&) override;
 };
 
-/** The bassline as a piano roll over its pitch range (sidechain-hinted notes outlined). */
-class BassLane final : public Lane
+/** Accent editing shared by the bass and drum lanes: a click cycles accent -> ghost -> off -> back,
+    a vertical drag sets the velocity (up = louder), all through the SongController (undoable). */
+class EditableLane : public Lane
+{
+public:
+    using Lane::Lane;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
+    std::function<void (const juce::String&)> onStatus;
+
+protected:
+    struct Target { bool valid = false; SongController::DrumHit hit; int bassStep = 0; bool isBass = false; };
+    virtual Target targetAt (juce::Point<float>) const = 0;
+    int velocityOf (const Target&) const;
+    juce::String describe (const Target&) const;
+    void paintEditMark (juce::Graphics&, juce::Rectangle<float>) const;
+
+private:
+    Target pressed;
+    int startVelocity = 0;
+    bool dragging = false;
+};
+
+/** The bassline as a piano roll over its pitch range (sidechain-hinted notes outlined, switched-off
+    notes hollow). Click / drag a note to edit its accent. */
+class BassLane final : public EditableLane
 {
 public:
     explicit BassLane (TimelineModel&);
+    /** The note's rectangle (lane coordinates) for a note of the generated line. */
+    juce::Rectangle<float> noteBounds (const generators::BassNote&) const;
+    Target targetAt (juce::Point<float>) const override;
 
 private:
     void paintContent (juce::Graphics&) override;
+    std::pair<int, int> pitchRange() const;
 };
 
-/** The groove: one row per drum element, velocity as brightness. */
-class DrumLane final : public Lane
+/** The groove: one row per drum element, velocity as brightness, switched-off hits hollow. Click a
+    hit to cycle its accent (an empty cell adds a hit), drag it up or down for its velocity. */
+class DrumLane final : public EditableLane
 {
 public:
     explicit DrumLane (TimelineModel&);
+    /** The hit place under a point: element by row, bar + nearest 1/16 step by time. */
+    Target targetAt (juce::Point<float>) const override;
+    juce::Rectangle<float> hitBounds (const generators::DrumNote&) const;
+    float rowHeight() const noexcept { return (float) (getHeight() - 4) / (float) generators::numDrumElements; }
 
 private:
     void paintContent (juce::Graphics&) override;

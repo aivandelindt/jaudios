@@ -11,7 +11,9 @@ namespace gen = generators;
 
 namespace
 {
-const juce::Identifier songId ("SONG"), chordsId ("CHORDS"), slotId ("SLOT"), mixerId ("MIXER"), channelId ("CHANNEL");
+const juce::Identifier songId ("SONG"), chordsId ("CHORDS"), slotId ("SLOT"), mixerId ("MIXER"), channelId ("CHANNEL"),
+    editsId ("EDITS"), drumHitId ("DRUM"), bassNoteId ("BASS");
+const juce::Identifier elementProp ("element"), barProp ("bar"), stepProp ("step"), velocityProp ("velocity");
 const juce::Identifier styleProp ("style"), progressionProp ("progression"), slotProp ("slot"), rootProp ("root"),
     qualityProp ("quality"), inversionProp ("inversion"), idProp ("id"), gainProp ("gain"), muteProp ("mute"), soloProp ("solo");
 
@@ -64,6 +66,7 @@ SongController::SongController (AudioEngine& e, std::shared_ptr<const SongAnalys
         mixer.appendChild (ch, nullptr);
     }
     tree.appendChild (mixer, nullptr);
+    tree.appendChild (juce::ValueTree (editsId), nullptr);
 
     applyMixer();
     engine.setTempo (analysed->analysis.rhythm.bpm > 0.0 ? analysed->analysis.rhythm.bpm : 120.0);
@@ -80,10 +83,21 @@ SongController::SongController (AudioEngine& e, std::shared_ptr<const SongAnalys
     engine.setChannelInstrument (ChannelId::drums, std::make_shared<synth::DrumInstrument>());
     rebuildParts();
     tree.addListener (this);
+    for (int c = 0; c < numChannelIds; ++c) // FX edits change what an export contains
+        if (auto* fx = engine.fxState ((ChannelId) c))
+            for (const auto& spec : fx::paramSpecs())
+                fx->addParameterListener (spec.id, this);
 }
 
 SongController::~SongController()
 {
+    for (auto& j : jobs)
+        j->cancel();
+    exportThread.removeAllJobs (true, 30000);
+    for (int c = 0; c < numChannelIds; ++c)
+        if (auto* fx = engine.fxState ((ChannelId) c))
+            for (const auto& spec : fx::paramSpecs())
+                fx->removeParameterListener (spec.id, this);
     tree.removeListener (this);
 }
 
@@ -99,6 +113,7 @@ void SongController::setStyle (gen::Style s)
         return;
     undo.beginNewTransaction ("Style");
     chordsNode().removeAllChildren (&undo);
+    editsNode().removeAllChildren (&undo); // another groove: the steps mean other hits
     tree.setProperty (progressionProp, 0, &undo);
     tree.setProperty (styleProp, (int) s, &undo);
 }
@@ -182,22 +197,31 @@ void SongController::setSolo (ChannelId c, bool s)
 //==============================================================================
 void SongController::valueTreePropertyChanged (juce::ValueTree& t, const juce::Identifier& prop)
 {
+    ++rev;
     if (t.hasType (channelId))
         applyMixer();
+    else if (t.hasType (drumHitId) || t.hasType (bassNoteId))
+        applyAccentEdits();
     else if (prop == styleProp || prop == progressionProp || t.hasType (slotId))
         rebuildParts();
 }
 
 void SongController::valueTreeChildAdded (juce::ValueTree& parent, juce::ValueTree&)
 {
+    ++rev;
     if (parent.hasType (chordsId))
         rebuildParts();
+    else if (parent.hasType (editsId))
+        applyAccentEdits();
 }
 
 void SongController::valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueTree&, int)
 {
+    ++rev;
     if (parent.hasType (chordsId))
         rebuildParts();
+    else if (parent.hasType (editsId))
+        applyAccentEdits();
 }
 
 void SongController::setInstrumentsForStyle()
@@ -241,13 +265,260 @@ void SongController::rebuildParts()
             progression.chords[(size_t) slot] = theory::Chord { (int) node[rootProp], (theory::Quality) (int) node[qualityProp], (int) node[inversionProp] };
     }
     current = generateParts (*analysed, progression, s, true);
+    generatedDrums = current.drumNotes;
+    generatedBass = current.bassNotes;
+    engine.setChannelClip (ChannelId::chords, std::make_shared<const MidiClip> (makeClip (current.chords, analysed->sampleRate)));
+    applyAccentEdits(); // bass + drums clips, with the user's accents
+}
+
+void SongController::applyAccentEdits()
+{
+    // drums: from the generated groove, edits by (element, bar, step)
+    current.drumNotes = generatedDrums;
+    const auto bars = songBars (*analysed);
+    const double swing = current.drumPattern != nullptr ? current.drumPattern->swing : 0.0;
+    for (const auto& e : editsNode())
+    {
+        const int velocity = e[velocityProp];
+        if (e.hasType (drumHitId))
+        {
+            const DrumHit h { (gen::DrumElement) (int) e[elementProp], (int) e[barProp], (int) e[stepProp] };
+            auto it = std::find_if (current.drumNotes.begin(), current.drumNotes.end(), [&] (const gen::DrumNote& n) {
+                return n.element == h.element && n.bar == h.bar && n.step == h.step;
+            });
+            if (it != current.drumNotes.end())
+            {
+                if (velocity > 0)
+                    it->velocity = velocity;
+                else
+                    current.drumNotes.erase (it);
+            }
+            else if (velocity > 0 && h.bar >= 0 && h.bar < (int) bars.size())
+            {
+                // an added hit, placed like the generator places one (swing on odd steps)
+                const auto [b0, b1] = bars[(size_t) h.bar];
+                const double stepLen = (b1 - b0) / gen::DrumPattern::stepsPerBar;
+                const double start = b0 + h.step * stepLen + (h.step % 2 == 1 ? swing * stepLen : 0.0);
+                const bool longOne = h.element == gen::DrumElement::openhat || h.element == gen::DrumElement::ride;
+                current.drumNotes.push_back ({ start, start + (longOne ? 2.0 : 0.9) * stepLen, h.element, velocity, h.bar, h.step });
+            }
+        }
+    }
+    std::stable_sort (current.drumNotes.begin(), current.drumNotes.end(),
+                      [] (const gen::DrumNote& a, const gen::DrumNote& b) { return a.startSec < b.startSec; });
+
+    // bass: from the generated line, edits by 1/16 step
+    current.bassNotes = generatedBass;
+    for (const auto& e : editsNode())
+        if (e.hasType (bassNoteId))
+        {
+            const int step = e[stepProp], velocity = e[velocityProp];
+            auto it = std::find_if (current.bassNotes.begin(), current.bassNotes.end(),
+                                    [&] (const gen::BassNote& n) { return bassStepOf (n) == step; });
+            if (it == current.bassNotes.end())
+                continue;
+            if (velocity > 0)
+                it->velocity = velocity;
+            else
+                current.bassNotes.erase (it);
+        }
+    current.bass.clear();
+    for (const auto& n : current.bassNotes)
+    {
+        current.bass.addEvent (juce::MidiMessage::noteOn (1, n.pitch, (juce::uint8) n.velocity).withTimeStamp (n.startSec));
+        current.bass.addEvent (juce::MidiMessage::noteOff (1, n.pitch).withTimeStamp (n.endSec));
+    }
+    current.bass.sort();
+    current.bass.updateMatchedPairs();
+
     const double rate = analysed->sampleRate;
-    engine.setChannelClip (ChannelId::chords, std::make_shared<const MidiClip> (makeClip (current.chords, rate)));
     engine.setChannelClip (ChannelId::bass, std::make_shared<const MidiClip> (makeClip (current.bass, rate)));
     engine.setChannelClip (ChannelId::drums, std::make_shared<const MidiClip> (makeClip (synth::drumsToMidi (current.drumNotes), rate)));
     if (onPartsChanged)
         onPartsChanged();
 }
+
+//==============================================================================
+juce::ValueTree SongController::editsNode() const { return tree.getChildWithName (editsId); }
+
+juce::ValueTree SongController::drumEdit (DrumHit h) const
+{
+    for (const auto& e : editsNode())
+        if (e.hasType (drumHitId) && (int) e[elementProp] == (int) h.element && (int) e[barProp] == h.bar && (int) e[stepProp] == h.step)
+            return e;
+    return {};
+}
+
+juce::ValueTree SongController::bassEdit (int step) const
+{
+    for (const auto& e : editsNode())
+        if (e.hasType (bassNoteId) && (int) e[stepProp] == step)
+            return e;
+    return {};
+}
+
+void SongController::setEdit (juce::ValueTree existing, std::function<juce::ValueTree()> make, int velocity, const juce::String& undoName,
+                              bool coalesce)
+{
+    // a drag on one note is one undo step: coalesce consecutive edits with the same name; a click is its own
+    if (! coalesce || undo.getUndoDescription() != undoName || undo.getNumActionsInCurrentTransaction() == 0)
+        undo.beginNewTransaction (undoName);
+    velocity = juce::jlimit (0, 127, velocity);
+    if (existing.isValid())
+        existing.setProperty (velocityProp, velocity, &undo);
+    else
+    {
+        auto node = make();
+        node.setProperty (velocityProp, velocity, nullptr);
+        editsNode().appendChild (node, &undo);
+    }
+}
+
+int SongController::generatedDrumVelocity (DrumHit h) const
+{
+    for (const auto& n : generatedDrums)
+        if (n.element == h.element && n.bar == h.bar && n.step == h.step)
+            return n.velocity;
+    return 0;
+}
+
+int SongController::drumVelocity (DrumHit h) const
+{
+    if (const auto e = drumEdit (h); e.isValid())
+        return (int) e[velocityProp];
+    return generatedDrumVelocity (h);
+}
+
+bool SongController::isDrumHitEdited (DrumHit h) const { return drumEdit (h).isValid(); }
+
+void SongController::setDrumVelocity (DrumHit h, int velocity) { writeDrum (h, velocity, true); }
+
+void SongController::writeDrum (DrumHit h, int velocity, bool coalesce)
+{
+    if (h.bar < 0 || h.bar >= (int) analysed->source.bars.size() || h.step < 0 || h.step >= gen::DrumPattern::stepsPerBar)
+        return;
+    const auto undoName = "Drum " + juce::String ((int) h.element) + ":" + juce::String (h.bar) + ":" + juce::String (h.step);
+    setEdit (drumEdit (h), [h] {
+        juce::ValueTree n (drumHitId);
+        n.setProperty (elementProp, (int) h.element, nullptr);
+        n.setProperty (barProp, h.bar, nullptr);
+        n.setProperty (stepProp, h.step, nullptr);
+        return n;
+    }, velocity, undoName, coalesce);
+}
+
+void SongController::resetDrumHit (DrumHit h)
+{
+    if (auto e = drumEdit (h); e.isValid())
+    {
+        undo.beginNewTransaction ("Reset drum hit");
+        editsNode().removeChild (e, &undo);
+    }
+}
+
+void SongController::cycleDrumAccent (DrumHit h)
+{
+    const int base = generatedDrumVelocity (h);
+    const int now = drumVelocity (h);
+    const bool edited = isDrumHitEdited (h);
+    auto remove = [&] {
+        undo.beginNewTransaction ("Accent");
+        editsNode().removeChild (drumEdit (h), &undo);
+    };
+    if (base == 0) // a step the groove leaves empty: add -> accent -> ghost -> remove
+    {
+        if (! edited || now == 0)
+            writeDrum (h, addedHitVelocity, false);
+        else if (now == addedHitVelocity)
+            writeDrum (h, accentOf (addedHitVelocity), false);
+        else if (now == accentOf (addedHitVelocity))
+            writeDrum (h, ghostOf (addedHitVelocity), false);
+        else
+            remove();
+        return;
+    }
+    if (! edited)
+        writeDrum (h, accentOf (base), false);
+    else if (now == accentOf (base))
+        writeDrum (h, ghostOf (base), false);
+    else if (now == ghostOf (base))
+        writeDrum (h, 0, false);
+    else
+        remove(); // off (or dragged) -> back to the groove
+}
+
+int SongController::bassStepOf (const gen::BassNote& n) const
+{
+    return (int) std::lround (barGrid.toBeats (n.startSec) * 4.0);
+}
+
+int SongController::generatedBassVelocity (int step) const
+{
+    for (const auto& n : generatedBass)
+        if (bassStepOf (n) == step)
+            return n.velocity;
+    return 0;
+}
+
+int SongController::bassVelocity (int step) const
+{
+    if (const auto e = bassEdit (step); e.isValid())
+        return (int) e[velocityProp];
+    return generatedBassVelocity (step);
+}
+
+bool SongController::isBassNoteEdited (int step) const { return bassEdit (step).isValid(); }
+
+void SongController::setBassVelocity (int step, int velocity) { writeBass (step, velocity, true); }
+
+void SongController::writeBass (int step, int velocity, bool coalesce)
+{
+    if (generatedBassVelocity (step) == 0)
+        return; // the bassline's rhythm comes from its pattern: only its notes are edited
+    setEdit (bassEdit (step), [step] {
+        juce::ValueTree n (bassNoteId);
+        n.setProperty (stepProp, step, nullptr);
+        return n;
+    }, velocity, "Bass " + juce::String (step), coalesce);
+}
+
+void SongController::resetBassNote (int step)
+{
+    if (auto e = bassEdit (step); e.isValid())
+    {
+        undo.beginNewTransaction ("Reset bass note");
+        editsNode().removeChild (e, &undo);
+    }
+}
+
+void SongController::cycleBassAccent (int step)
+{
+    const int base = generatedBassVelocity (step);
+    if (base == 0)
+        return;
+    const int now = bassVelocity (step);
+    if (! isBassNoteEdited (step))
+        writeBass (step, accentOf (base), false);
+    else if (now == accentOf (base))
+        writeBass (step, ghostOf (base), false);
+    else if (now == ghostOf (base))
+        writeBass (step, 0, false);
+    else
+    {
+        undo.beginNewTransaction ("Accent");
+        editsNode().removeChild (bassEdit (step), &undo);
+    }
+}
+
+void SongController::clearAccents()
+{
+    if (editsNode().getNumChildren() == 0)
+        return;
+    undo.beginNewTransaction ("Clear accents");
+    editsNode().removeAllChildren (&undo);
+}
+
+int SongController::numAccentEdits() const { return editsNode().getNumChildren(); }
 
 void SongController::applyMixer()
 {
@@ -281,13 +552,21 @@ juce::File SongController::exportMidi (const juce::String& part, const juce::Fil
     return ex::writeMidiFile (f, ex::makeMidiFile (songName(), parts, barGrid, key)) ? f : juce::File();
 }
 
-juce::File SongController::exportWav (const juce::String& partName, const juce::File& dir, double tailSeconds) const
+std::shared_ptr<WavExportJob> SongController::startWavExport (const juce::String& partName, const juce::File& dir, double tailSeconds)
 {
     const auto part = findExportPart (partName, analysed->stems.has_value());
     if (! part)
-        return {};
-    // a second engine set up like the live one (the live one keeps playing)
-    AudioEngine offline;
+        return nullptr;
+    // finished jobs' engines go here, on the message thread (an engine owns a device manager)
+    jobs.erase (std::remove_if (jobs.begin(), jobs.end(), [] (const auto& j) { return j->state() != WavExportJob::State::rendering; }),
+                jobs.end());
+
+    auto job = std::make_shared<WavExportJob>();
+    job->part = part->name;
+    job->songRevision = rev.load();
+    job->engine = std::make_unique<AudioEngine>();
+    auto& offline = *job->engine;
+    // a second engine set up like the live one (which keeps playing)
     for (int c = 0; c < numChannelIds; ++c)
     {
         const auto id = (ChannelId) c;
@@ -315,9 +594,37 @@ juce::File SongController::exportWav (const juce::String& partName, const juce::
     offline.setChannelClip (ChannelId::bass, std::make_shared<const MidiClip> (makeClip (current.bass, sr)));
     offline.setChannelClip (ChannelId::drums, std::make_shared<const MidiClip> (makeClip (synth::drumsToMidi (current.drumNotes), sr)));
 
-    const auto audio = exporting::alignToGrid (renderPart (offline, *part, sourceBuffer->getNumSamples(), sr, tailSeconds), sr, barGrid);
-    const auto f = dir.getChildFile (exportFileStem (songName(), part->name, theory::traditionalName (analysed->source.key), barGrid.bpm()) + ".wav");
-    return exporting::writeWav (f, audio, sr, exporting::WavFormat::int24) ? f : juce::File();
+    const auto file = dir.getChildFile (exportFileStem (songName(), part->name, theory::traditionalName (analysed->source.key), barGrid.bpm()) + ".wav");
+    const auto length = (juce::int64) sourceBuffer->getNumSamples();
+    const auto grid = barGrid;
+    auto* raw = job.get(); // the controller keeps the job alive until the thread is done with it
+    exportThread.addJob ([raw, part = *part, file, length, sr, grid, tailSeconds] {
+        auto audio = renderPart (*raw->engine, part, length, sr, tailSeconds, 512, [raw] (double f) {
+            raw->fraction.store (f);
+            return ! raw->cancelRequested.load();
+        });
+        if (raw->cancelRequested.load())
+        {
+            raw->status.store (WavExportJob::State::cancelled);
+            return;
+        }
+        const bool ok = exporting::writeWav (file, exporting::alignToGrid (audio, sr, grid), sr, exporting::WavFormat::int24);
+        raw->result = ok ? file : juce::File();
+        raw->fraction.store (1.0);
+        raw->status.store (ok ? WavExportJob::State::done : WavExportJob::State::failed);
+    });
+    jobs.push_back (job);
+    return job;
+}
+
+juce::File SongController::exportWav (const juce::String& partName, const juce::File& dir, double tailSeconds)
+{
+    auto job = startWavExport (partName, dir, tailSeconds);
+    if (job == nullptr)
+        return {};
+    while (job->state() == WavExportJob::State::rendering)
+        juce::Thread::sleep (5);
+    return job->state() == WavExportJob::State::done ? job->file() : juce::File();
 }
 
 } // namespace jaudios

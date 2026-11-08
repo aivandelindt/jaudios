@@ -288,3 +288,123 @@ TEST_CASE ("A full repaint of a 3-minute song fits the 60 fps budget", "[ui][vie
     // the typical frame (the median; a single slow frame is the scheduler, e.g. under ctest -j)
     CHECK (median < 16.7);
 }
+
+TEST_CASE ("WAV tiles render in the background, then drag; edits make them out of date", "[ui][view][export]")
+{
+    Fixture f;
+    auto& tiles = f.view.exportTiles();
+    int wav = -1;
+    for (int i = 0; i < (int) tiles.tiles().size(); ++i)
+        if (tiles.tiles()[(size_t) i].part == "drums" && tiles.tiles()[(size_t) i].kind == "wav")
+            wav = i;
+    REQUIRE (wav >= 0);
+    CHECK (tiles.wavState (wav) == ExportTiles::WavState::none);
+    CHECK_FALSE (tiles.fileFor (wav).exists()); // nothing to drag yet
+    tiles.clickTile (wav);
+    CHECK (tiles.wavState (wav) == ExportTiles::WavState::rendering); // the click returned at once
+    const auto until = juce::Time::getMillisecondCounter() + 120000u;
+    while (tiles.wavState (wav) == ExportTiles::WavState::rendering && juce::Time::getMillisecondCounter() < until)
+        juce::Thread::sleep (5);
+    REQUIRE (tiles.wavState (wav) == ExportTiles::WavState::ready);
+    const auto file = tiles.fileFor (wav);
+    CHECK (file.existsAsFile());
+    CHECK (file.getParentDirectory() == f.tmp.dir);
+    f.song->setMute (ChannelId::source, true); // any change to the song
+    CHECK (tiles.wavState (wav) == ExportTiles::WavState::outOfDate);
+    CHECK_FALSE (tiles.fileFor (wav).exists());
+    tiles.clickTile (wav); // update
+    CHECK (tiles.wavState (wav) == ExportTiles::WavState::rendering);
+    tiles.clickTile (wav); // a click while rendering cancels
+    while (tiles.job (wav)->state() == WavExportJob::State::rendering)
+        juce::Thread::sleep (5);
+    CHECK (tiles.wavState (wav) == ExportTiles::WavState::none);
+}
+
+namespace
+{
+juce::MouseEvent mouseAt (juce::Component& c, juce::Point<float> pos, juce::Point<float> downAt)
+{
+    return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), pos, {}, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, &c, &c,
+                             juce::Time::getCurrentTime(), downAt, juce::Time::getCurrentTime(), 1, false);
+}
+void click (juce::Component& c, juce::Point<float> p)
+{
+    c.mouseDown (mouseAt (c, p, p));
+    c.mouseUp (mouseAt (c, p, p));
+}
+} // namespace
+
+TEST_CASE ("Drum lane: click cycles a hit, drag sets its velocity, an empty cell gets a hit", "[ui][view][accents]")
+{
+    Fixture f;
+    auto& lane = f.view.drumLane();
+    const auto& notes = f.song->parts().drumNotes;
+    const auto kick = *std::find_if (notes.begin(), notes.end(), [] (const gen::DrumNote& n) {
+        return n.element == gen::DrumElement::kick && n.bar == 2 && n.step == 0;
+    });
+    const auto centre = lane.hitBounds (kick).getCentre();
+    const auto target = SongController::DrumHit { kick.element, kick.bar, kick.step };
+    const int base = kick.velocity;
+
+    click (lane, centre);
+    CHECK (f.song->drumVelocity (target) == SongController::accentOf (base));
+    click (lane, centre);
+    click (lane, centre);
+    CHECK (f.song->drumVelocity (target) == 0); // off: drawn hollow, still clickable
+    click (lane, centre);
+    CHECK_FALSE (f.song->isDrumHitEdited (target));
+
+    // drag 30 px up: 30 velocity steps louder, one undo step
+    lane.mouseDown (mouseAt (lane, centre, centre));
+    for (int dy = 2; dy <= 30; dy += 2)
+        lane.mouseDrag (mouseAt (lane, centre.translated (0.0f, (float) -dy), centre));
+    lane.mouseUp (mouseAt (lane, centre.translated (0.0f, -30.0f), centre));
+    CHECK (f.song->drumVelocity (target) == juce::jmin (127, base + 30));
+    REQUIRE (f.view.keyPressed (juce::KeyPress ('z', juce::ModifierKeys::commandModifier, 0)));
+    CHECK (f.song->drumVelocity (target) == base);
+
+    // a clap in a cell the groove leaves empty (bar 3, step 7)
+    const SongController::DrumHit empty { gen::DrumElement::clap, 3, 7 };
+    REQUIRE (f.song->generatedDrumVelocity (empty) == 0);
+    const auto bars = songBars (f.song->song());
+    const double t = bars[3].first + 7 * (bars[3].second - bars[3].first) / 16.0;
+    const juce::Point<float> cell { f.view.timeline().toX (t) + 1.0f, 2.0f + lane.rowHeight() * 2.5f };
+    const auto found = SongController::DrumHit { gen::DrumElement::clap, 3, 7 };
+    click (lane, cell);
+    CHECK (f.song->drumVelocity (found) == SongController::addedHitVelocity);
+
+    if (const auto out = juce::SystemStats::getEnvironmentVariable ("JAUDIOS_UI_SNAPSHOT", {}); out.isNotEmpty())
+    {
+        // an accented kick, a ghosted snare, a switched-off hat and the added clap, zoomed to bars 2-5
+        f.song->cycleDrumAccent (target);
+        const SongController::DrumHit snare { gen::DrumElement::snare, 2, 4 }, hat { gen::DrumElement::hat, 2, 6 };
+        f.song->cycleDrumAccent (snare);
+        f.song->cycleDrumAccent (snare);
+        for (int i = 0; i < 3; ++i)
+            f.song->cycleDrumAccent (hat);
+        f.view.timeline().zoom (2.0, 0.0f);
+        f.view.timeline().scrollBy (bars[2].first - f.view.timeline().start());
+        juce::FileOutputStream os { juce::File (out).getSiblingFile ("accents.png") };
+        os.setPosition (0);
+        os.truncate();
+        juce::PNGImageFormat().writeImageToStream (lane.createComponentSnapshot (lane.getLocalBounds(), true, 2.0f), os);
+    }
+}
+
+TEST_CASE ("Bass lane: click cycles a note's accent; a switched-off note can be clicked back on", "[ui][view][accents]")
+{
+    Fixture f;
+    auto& lane = f.view.bassLane();
+    const auto note = f.song->generatedBassNotes()[2];
+    const int step = f.song->bassStepOf (note);
+    const auto centre = lane.noteBounds (note).getCentre();
+    click (lane, centre);
+    CHECK (f.song->bassVelocity (step) == SongController::accentOf (note.velocity));
+    click (lane, centre);
+    click (lane, centre);
+    CHECK (f.song->bassVelocity (step) == 0);
+    CHECK (f.song->parts().bassNotes.size() == f.song->generatedBassNotes().size() - 1); // gone from what plays
+    click (lane, centre); // the hollow note is still there to click
+    CHECK (f.song->bassVelocity (step) == note.velocity);
+    CHECK_FALSE (f.song->isBassNoteEdited (step));
+}

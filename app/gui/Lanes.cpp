@@ -198,54 +198,215 @@ void ChordLane::mouseDown (const juce::MouseEvent& e)
 }
 
 //==============================================================================
-BassLane::BassLane (TimelineModel& t) : Lane (t, colours::bass) {}
-
-void BassLane::paintContent (juce::Graphics& g)
+int EditableLane::velocityOf (const Target& t) const
 {
-    const auto& notes = song->parts().bassNotes;
-    if (notes.empty())
+    return t.isBass ? song->bassVelocity (t.bassStep) : song->drumVelocity (t.hit);
+}
+
+juce::String EditableLane::describe (const Target& t) const
+{
+    static const char* names[] = { "Kick", "Snare", "Clap", "Hat", "Open hat", "Perc", "Ride" };
+    const int v = velocityOf (t);
+    const int base = t.isBass ? song->generatedBassVelocity (t.bassStep) : song->generatedDrumVelocity (t.hit);
+    juce::String what = t.isBass ? juce::String ("Bass note, step ") + juce::String (t.bassStep + 1)
+                                 : juce::String (names[(int) t.hit.element]) + ", bar " + juce::String (t.hit.bar + 1) + " step "
+                                       + juce::String (t.hit.step + 1);
+    const juce::String level = v == 0 ? (base == 0 ? "empty: click to add a hit" : "off")
+                             : base > 0 && v == SongController::accentOf (base) ? "accent"
+                             : base > 0 && v == SongController::ghostOf (base) ? "ghost" : "velocity " + juce::String (v);
+    return what + ": " + level + "  (click: accent / ghost / off, drag up or down: velocity)";
+}
+
+void EditableLane::mouseMove (const juce::MouseEvent& e)
+{
+    if (song == nullptr)
         return;
+    const auto t = targetAt (e.position);
+    setMouseCursor (t.valid ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
+    if (t.valid && onStatus)
+        onStatus (describe (t));
+}
+
+void EditableLane::mouseDown (const juce::MouseEvent& e)
+{
+    pressed = song != nullptr ? targetAt (e.position) : Target {};
+    dragging = false;
+    if (pressed.valid)
+    {
+        startVelocity = velocityOf (pressed);
+        if (startVelocity == 0)
+            startVelocity = pressed.isBass ? song->generatedBassVelocity (pressed.bassStep) : SongController::addedHitVelocity;
+    }
+}
+
+void EditableLane::mouseDrag (const juce::MouseEvent& e)
+{
+    if (! pressed.valid)
+        return;
+    const int dy = e.getDistanceFromDragStartY();
+    if (! dragging && std::abs (dy) < 4)
+        return;
+    dragging = true;
+    const int v = juce::jlimit (1, 127, startVelocity - dy); // a pixel per velocity step, up = louder
+    if (pressed.isBass)
+        song->setBassVelocity (pressed.bassStep, v);
+    else
+        song->setDrumVelocity (pressed.hit, v);
+    if (onStatus)
+        onStatus (describe (pressed));
+}
+
+void EditableLane::mouseUp (const juce::MouseEvent&)
+{
+    if (pressed.valid && ! dragging)
+    {
+        if (pressed.isBass)
+            song->cycleBassAccent (pressed.bassStep);
+        else
+            song->cycleDrumAccent (pressed.hit);
+        if (onStatus)
+            onStatus (describe (pressed));
+    }
+    pressed = {};
+    dragging = false;
+}
+
+void EditableLane::paintEditMark (juce::Graphics& g, juce::Rectangle<float> r) const
+{
+    g.setColour (colours::text);
+    g.fillEllipse (r.getX(), r.getY() - 1.0f, 3.0f, 3.0f);
+}
+
+//==============================================================================
+BassLane::BassLane (TimelineModel& t) : EditableLane (t, colours::bass) {}
+
+std::pair<int, int> BassLane::pitchRange() const
+{
     int lo = 127, hi = 0;
-    for (const auto& n : notes)
+    for (const auto& n : song->generatedBassNotes())
     {
         lo = std::min (lo, n.pitch);
         hi = std::max (hi, n.pitch);
     }
-    lo -= 1;
-    hi += 1;
-    const float rowH = (float) (getHeight() - 6) / (float) (hi - lo + 1);
-    for (const auto& n : notes)
+    return { lo - 1, hi + 1 };
+}
+
+juce::Rectangle<float> BassLane::noteBounds (const generators::BassNote& n) const
+{
+    const auto [lo, hi] = pitchRange();
+    const float rowH = (float) (getHeight() - 6) / (float) std::max (1, hi - lo + 1);
+    const float x0 = timeline.toX (n.startSec), x1 = timeline.toX (n.endSec);
+    return { x0, 3.0f + (float) (hi - n.pitch) * rowH, std::max (2.0f, x1 - x0 - 1.0f), std::max (3.0f, rowH - 1.0f) };
+}
+
+EditableLane::Target BassLane::targetAt (juce::Point<float> p) const
+{
+    if (song == nullptr)
+        return {};
+    for (const auto& n : song->generatedBassNotes())
+        if (noteBounds (n).expanded (1.0f, 3.0f).contains (p)) // thin notes: a little slack vertically
+        {
+            Target t;
+            t.valid = true;
+            t.isBass = true;
+            t.bassStep = song->bassStepOf (n);
+            return t;
+        }
+    return {};
+}
+
+void BassLane::paintContent (juce::Graphics& g)
+{
+    if (song->generatedBassNotes().empty())
+        return;
+    const bool anyEdits = song->numAccentEdits() > 0;
+    for (const auto& gen : song->generatedBassNotes())
     {
-        const float x0 = timeline.toX (n.startSec), x1 = timeline.toX (n.endSec);
-        if (x1 < 0.0f || x0 > (float) getWidth())
+        const auto r = noteBounds (gen);
+        if (r.getRight() < 0.0f || r.getX() > (float) getWidth())
             continue;
-        const juce::Rectangle<float> r (x0, 3.0f + (float) (hi - n.pitch) * rowH, std::max (2.0f, x1 - x0 - 1.0f), std::max (2.0f, rowH - 1.0f));
-        g.setColour (accent.withAlpha (0.35f + 0.6f * (float) n.velocity / 127.0f));
+        const int step = anyEdits ? song->bassStepOf (gen) : 0;
+        const int v = anyEdits ? song->bassVelocity (step) : gen.velocity;
+        if (v == 0) // switched off: hollow, still clickable
+        {
+            g.setColour (accent.withAlpha (0.5f));
+            g.drawRect (r, 1.0f);
+            continue;
+        }
+        g.setColour (accent.withAlpha (0.35f + 0.6f * (float) v / 127.0f));
         g.fillRect (r);
-        if (n.sidechain)
+        if (gen.sidechain)
         {
             g.setColour (colours::drums.withAlpha (0.7f));
             g.drawRect (r, 1.0f);
         }
+        if (anyEdits && song->isBassNoteEdited (step))
+            paintEditMark (g, r);
     }
 }
 
 //==============================================================================
-DrumLane::DrumLane (TimelineModel& t) : Lane (t, colours::drums) {}
+DrumLane::DrumLane (TimelineModel& t) : EditableLane (t, colours::drums) {}
+
+juce::Rectangle<float> DrumLane::hitBounds (const generators::DrumNote& n) const
+{
+    const float x = timeline.toX (n.startSec);
+    const float y = 2.0f + rowHeight() * (float) (int) n.element;
+    return { x, y + 1.0f, std::max (3.0f, (float) (0.05 / timeline.secondsPerPixel())), std::max (2.0f, rowHeight() - 2.0f) };
+}
+
+EditableLane::Target DrumLane::targetAt (juce::Point<float> p) const
+{
+    if (song == nullptr)
+        return {};
+    const int row = (int) std::floor ((p.y - 2.0f) / rowHeight());
+    if (row < 0 || row >= generators::numDrumElements)
+        return {};
+    const auto bars = songBars (song->song());
+    const double t = timeline.toSeconds (p.x);
+    for (size_t b = 0; b < bars.size(); ++b)
+        if (t >= bars[b].first - 1e-9 && t < bars[b].second)
+        {
+            const double stepLen = (bars[b].second - bars[b].first) / generators::DrumPattern::stepsPerBar;
+            // the step whose hit starts nearest to the pointer, a little to its left counts too
+            const int step = juce::jlimit (0, generators::DrumPattern::stepsPerBar - 1, (int) std::floor ((t - bars[b].first) / stepLen + 0.25));
+            Target target;
+            target.valid = true;
+            target.hit = { (generators::DrumElement) row, (int) b, step };
+            return target;
+        }
+    return {};
+}
 
 void DrumLane::paintContent (juce::Graphics& g)
 {
-    const auto& notes = song->parts().drumNotes;
-    const int rows = generators::numDrumElements;
-    const float rowH = (float) (getHeight() - 4) / (float) rows;
-    for (const auto& n : notes)
+    // element initials at the lane's left edge (the rows you edit)
+    static const char* initials[] = { "K", "S", "C", "H", "O", "P", "R" };
+    g.setFont (juce::FontOptions (9.0f));
+    g.setColour (colours::textDim);
+    for (int e = 0; e < generators::numDrumElements; ++e)
+        g.drawText (initials[e], 2, (int) (2.0f + rowHeight() * (float) e), 10, (int) rowHeight(), juce::Justification::centredLeft);
+
+    const bool anyEdits = song->numAccentEdits() > 0; // the edit lookups only when there are edits
+    for (const auto& n : song->parts().drumNotes)
     {
-        const float x = timeline.toX (n.startSec);
-        if (x < -4.0f || x > (float) getWidth())
+        const auto r = hitBounds (n);
+        if (r.getRight() < 0.0f || r.getX() > (float) getWidth())
             continue;
-        const float y = 2.0f + rowH * (float) (int) n.element;
         g.setColour (accent.withAlpha (0.25f + 0.75f * (float) n.velocity / 127.0f));
-        g.fillRect (juce::Rectangle<float> (x, y + 1.0f, std::max (2.0f, (float) (0.05 / timeline.secondsPerPixel())), std::max (1.0f, rowH - 2.0f)));
+        g.fillRect (r);
+        if (anyEdits && song->isDrumHitEdited ({ n.element, n.bar, n.step }))
+            paintEditMark (g, r);
+    }
+    if (! anyEdits)
+        return;
+    // generated hits the user switched off: hollow
+    g.setColour (accent.withAlpha (0.5f));
+    for (const auto& n : song->generatedDrumNotes())
+    {
+        const auto r = hitBounds (n);
+        if (r.getRight() >= 0.0f && r.getX() <= (float) getWidth() && song->drumVelocity ({ n.element, n.bar, n.step }) == 0)
+            g.drawRect (r, 1.0f);
     }
 }
 
