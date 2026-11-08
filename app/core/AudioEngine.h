@@ -78,6 +78,7 @@ public:
     void setChannelGainDecibels (ChannelId, float dB);
     void setChannelMute (ChannelId, bool);
     void setChannelSolo (ChannelId, bool);
+    bool isChannelSoloed (ChannelId id) const noexcept { return solos[(size_t) id]; }
     void setMasterGainDecibels (float dB);
 
     /** A channel's insert FX (fx-chain): its parameter tree (the UI attaches to it), and a setter

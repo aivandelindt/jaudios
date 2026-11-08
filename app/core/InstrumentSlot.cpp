@@ -150,8 +150,8 @@ bool ProjectInstruments::save (const juce::File& f) const
 std::optional<ProjectInstruments> ProjectInstruments::load (const juce::File& f, juce::String& error)
 {
     const auto v = juce::JSON::parse (f);
-    if (! v.isObject() || (int) v["version"] != 1)
-        return (error = f.getFileName() + " is not a JAudios project (version 1)", std::nullopt);
+    if (! v.isObject() || ((int) v["version"] != 1 && (int) v["version"] != 2)) // 2: Project, same "slots"
+        return (error = f.getFileName() + " is not a JAudios project (version 1 or 2)", std::nullopt);
     ProjectInstruments p;
     if (const auto* o = v["slots"].getDynamicObject())
         for (const auto& prop : o->getProperties())

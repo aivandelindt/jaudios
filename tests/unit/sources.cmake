@@ -30,4 +30,6 @@ set(JAUDIOS_TEST_SOURCES
     # synth-and-vst3-host
     ${CMAKE_CURRENT_LIST_DIR}/test_instruments.cpp
     # fx-chain
-    ${CMAKE_CURRENT_LIST_DIR}/test_fx.cpp)
+    ${CMAKE_CURRENT_LIST_DIR}/test_fx.cpp
+    # export-and-drag-drop
+    ${CMAKE_CURRENT_LIST_DIR}/test_export.cpp)

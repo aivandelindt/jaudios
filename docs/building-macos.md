@@ -309,6 +309,32 @@ CLI=build/tools/cli/app-cli_artefacts/Release/app-cli
 
 Values are plain units (Hz, dB, ms), `on` / `off` for switches, and a choice by name.
 
+## 3j. Export for your DAW
+
+`app-cli export` writes the song's parts as files that line up in a DAW. It takes the same options
+as `audition` (style, presets, plugins, `--fx`, `--project`):
+
+```bash
+CLI=build/tools/cli/app-cli_artefacts/Release/app-cli
+"$CLI" export tests/fixtures/house_124_Amin.wav --style house --fx chords.reverb_on=on --out /tmp/house-export
+python3 tools/check_export_alignment.py /tmp/house-export     # reads the files back as a DAW would
+```
+
+- **WAV** for the mix, chords, bass and drums. Add the stems with `--stems --parts mix,chords,bass,drums,stems`.
+  - Each part is rendered through the engine graph, soloed, with its instrument and FX.
+  - 24-bit by default (`--wav float` for 32-bit float), at the source's sample rate.
+  - A tail is added after the end, 2 s by default (`--tail SEC`), so reverb and delay can ring out.
+- **MIDI**, type 1: one file per generated part, plus `All parts`.
+  - The conductor track has the tempo map from the detected beats, 4/4 and the key signature; the
+    part tracks are named.
+- **`<name>.jaudios.json`** (project v2): the source's SHA-256, the key and tempo, the beats, the
+  progression, the patterns, each channel's instrument (plugin state included) and its FX, and the
+  list of exported files. `--project` reads it back.
+
+Every file starts on a bar line. When the music starts on a pickup, a bar is prepended (silent in
+the WAVs), so the first downbeat is the start of bar 2. Dropped on a bar line in a DAW at the
+song's tempo, the downbeats land on bar lines.
+
 ## 4. Run
 
 The app:

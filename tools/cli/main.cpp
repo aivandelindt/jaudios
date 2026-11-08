@@ -38,6 +38,12 @@
 //                                               channels' instruments, plugin state included; --fx sets a
 //                                               channel's insert FX (e.g. bass.duck_on=on), tempo-synced
 //                                               to the detected BPM
+//   app-cli export <audio-file> [audition options] [--parts mix,chords,bass,drums,stems] [--wav 24|float]
+//                  [--tail SEC] [--no-wav] [--name NAME] [--out DIR]
+//                                               the song's parts as bar-aligned files for a DAW: WAVs
+//                                               rendered through the engine graph (FX and tails) and
+//                                               type-1 MIDI (tempo map, key signature, track names),
+//                                               plus <name>.jaudios.json listing them
 //   app-cli plugins scan [--path DIR]... [--plugin-list FILE] [--timeout SEC]
 //                                               scans VST3s out of process (default: the standard VST3
 //                                               folders) into the known-plugin list
@@ -45,8 +51,11 @@
 
 #include "app/core/AnalysisService.h"
 #include "app/core/AudioEngine.h"
+#include "app/core/ExportService.h"
 #include "app/core/HarmonySource.h"
 #include "app/core/InstrumentSlot.h"
+#include "app/core/Project.h"
+#include "engine/util/Sha256.h"
 #include "app/core/OfflineRender.h"
 #include "app/core/RealtimeTrap.h"
 #include "engine/analysis/Analysis.h"
@@ -114,6 +123,8 @@ int usage()
                  "                   [--project FILE] [--save-project FILE] [--plugin-list FILE]\n"
                  "                   [--fx CHANNEL.PARAM=VALUE]... [--bypass] [--out FILE.wav]\n"
                  "  app-cli audition --list-presets | --list-fx\n"
+                 "  app-cli export <audio-file> [audition options] [--parts mix,chords,bass,drums,stems]\n"
+                 "                   [--wav 24|float] [--tail SEC] [--no-wav] [--name NAME] [--out DIR]\n"
                  "  app-cli plugins scan [--path DIR]... [--plugin-list FILE] [--timeout SEC]\n"
                  "  app-cli plugins list [--plugin-list FILE]\n";
     return 2;
@@ -1066,11 +1077,6 @@ int cmdPlugins (int argc, char** argv)
     return 0;
 }
 
-const std::array<std::pair<const char*, jaudios::ChannelId>, jaudios::numChannelIds> channelNames { {
-    { "source", jaudios::ChannelId::source }, { "chords", jaudios::ChannelId::chords }, { "bass", jaudios::ChannelId::bass },
-    { "drums", jaudios::ChannelId::drums }, { "drums_stem", jaudios::ChannelId::stemDrums }, { "bass_stem", jaudios::ChannelId::stemBass },
-    { "other_stem", jaudios::ChannelId::stemOther }, { "vocals_stem", jaudios::ChannelId::stemVocals } } };
-
 int cmdListFx()
 {
     namespace fx = jaudios::fx;
@@ -1100,8 +1106,8 @@ int cmdListFx()
         params.add (o);
     }
     juce::Array<var> channels;
-    for (const auto& c : channelNames)
-        channels.add (juce::String (c.first));
+    for (int c = 0; c < jaudios::numChannelIds; ++c)
+        channels.add (jaudios::channelName ((jaudios::ChannelId) c));
     printJson (makeObject ({ { "channels", channels }, { "order", "filter -> saturation -> ott -> duck -> delay -> reverb" }, { "parameters", params } }));
     return 0;
 }
@@ -1117,6 +1123,12 @@ struct AuditionOptions
     juce::StringArray fx; // "channel.param=value"
     bool drums = true, stems = false, bypass = false;
     juce::File out;
+    // app-cli export
+    bool exportMode = false, noWav = false;
+    juce::StringArray parts;
+    jaudios::exporting::WavFormat wav = jaudios::exporting::WavFormat::int24;
+    double tail = 2.0;
+    juce::String name;
 };
 
 /** The instrument for a channel: the project's slot, else a scanned plugin, else a built-in preset. */
@@ -1206,11 +1218,14 @@ int cmdAudition (const juce::File& file, AuditionOptions opt)
     if (opt.bassPreset.empty())
         opt.bassPreset = style == gen::Style::techno || style == gen::Style::trance ? "saw_bass" : "sub_bass";
     std::optional<jaudios::ProjectInstruments> project;
+    std::optional<jaudios::Project> projectFile;
     if (opt.project != juce::File())
     {
         juce::String error;
         project = jaudios::ProjectInstruments::load (opt.project, error);
-        if (! project)
+        if (project)
+            projectFile = jaudios::Project::load (opt.project, error);
+        if (! project || ! projectFile)
         {
             std::cerr << "error: " << opt.project.getFullPathName() << ": " << error << "\n";
             return 1;
@@ -1271,6 +1286,11 @@ int cmdAudition (const juce::File& file, AuditionOptions opt)
     engine.setChannelGainDecibels (jaudios::ChannelId::bass, -9.0f);
     engine.setChannelGainDecibels (jaudios::ChannelId::drums, -10.0f);
     engine.setBypass (opt.bypass);
+    if (projectFile && ! projectFile->applyFx (engine)) // the project's FX first; --fx flags change them
+    {
+        std::cerr << "error: " << opt.project.getFullPathName() << ": unreadable FX state\n";
+        return 1;
+    }
     juce::Array<var> fxApplied;
     for (const auto& setting : opt.fx)
     {
@@ -1278,8 +1298,8 @@ int cmdAudition (const juce::File& file, AuditionOptions opt)
         const auto value = setting.fromFirstOccurrenceOf ("=", false, false).trim();
         const auto channel = target.upToFirstOccurrenceOf (".", false, false);
         const auto param = target.fromFirstOccurrenceOf (".", false, false);
-        const auto it = std::find_if (channelNames.begin(), channelNames.end(), [&] (const auto& c) { return channel == c.first; });
-        if (it == channelNames.end() || ! setting.containsChar ('=') || ! engine.setFxParameter (it->second, param, value))
+        const auto id = jaudios::channelFromName (channel);
+        if (! id || ! setting.containsChar ('=') || ! engine.setFxParameter (*id, param, value))
         {
             std::cerr << "error: --fx " << setting << ": expected CHANNEL.PARAM=VALUE (app-cli audition --list-fx)\n";
             return 2;
@@ -1307,6 +1327,117 @@ int cmdAudition (const juce::File& file, AuditionOptions opt)
         engine.setChannelInstrument (jaudios::ChannelId::drums, drums);
         engine.setChannelClip (jaudios::ChannelId::drums, std::make_shared<const jaudios::MidiClip> (jaudios::makeClip (sy::drumsToMidi (drumNotes), sr)));
     }
+
+    // everything a project file keeps (v2), for --save-project and export
+    auto makeProject = [&] {
+        jaudios::Project p;
+        p.source = { file.getFullPathName(), juce::String (jaudios::util::Sha256::ofFile (file.getFullPathName().toStdString())), sr,
+                     (juce::int64) capture->buffer.getNumSamples() };
+        p.analysis = { juce::String (jaudios::theory::traditionalName (key)), bpm, harmony->analysis.rhythm.beats, harmony->analysis.rhythm.downbeats };
+        p.generation.style = jaudios::generators::styleName (style);
+        p.generation.progression = top.summary (key);
+        for (const auto& c : top.chords)
+            p.generation.chords.add (c.name (key));
+        p.generation.bassPattern = gen::bassPatternsFor (style).front()->name;
+        p.generation.drumPattern = opt.drums ? juce::String (gen::drumPatternsFor (style).front()->name) : juce::String();
+        p.instruments["chords"] = *jaudios::captureSlot (*chords);
+        p.instruments["bass"] = *jaudios::captureSlot (*bass);
+        if (drums != nullptr)
+            p.instruments["drums"] = *jaudios::captureSlot (*drums);
+        p.captureFx (engine);
+        return p;
+    };
+
+    if (opt.exportMode)
+    {
+        namespace ex = jaudios::exporting;
+        const juce::File dir = opt.out != juce::File() ? opt.out : file.getSiblingFile (file.getFileNameWithoutExtension() + " export");
+        const juce::String song = opt.name.isNotEmpty() ? opt.name : file.getFileNameWithoutExtension();
+        const juce::String keyName = jaudios::theory::traditionalName (key);
+        const auto grid = ex::BarGrid::fromAnalysis (harmony->analysis.rhythm.beats, harmony->analysis.rhythm.downbeats, bpm);
+        bool withStems = false;
+        if (harmony->stems && std::abs (harmony->stems->sampleRate - sr) < 0.5)
+            withStems = engine.setStems (std::make_shared<const juce::AudioBuffer<float>> (jaudios::analysis::stems::packStems (*harmony->stems)));
+        if (opt.parts.isEmpty())
+            opt.parts = { "mix", "chords", "bass", "drums" };
+        if (opt.parts.contains ("stems"))
+        {
+            opt.parts.removeString ("stems");
+            if (! withStems)
+            {
+                std::cerr << "error: --parts stems needs --stems (and a stem model)\n";
+                return 2;
+            }
+            opt.parts.addArray ({ "drums_stem", "bass_stem", "other_stem", "vocals_stem" });
+        }
+        std::vector<jaudios::ExportPart> parts;
+        for (const auto& id : opt.parts)
+        {
+            const auto part = jaudios::findExportPart (id, withStems);
+            if (! part || (part->channel == jaudios::ChannelId::drums && ! opt.drums))
+            {
+                std::cerr << "error: --parts: no part " << id << " (mix, chords, bass, drums, stems)\n";
+                return 2;
+            }
+            parts.push_back (*part);
+        }
+
+        auto exported = makeProject();
+        juce::Array<var> files;
+        auto addAsset = [&] (const juce::File& f, const juce::String& part, const juce::String& kind) {
+            exported.assets.add (f.getRelativePathFrom (dir));
+            files.add (makeObject ({ { "part", part }, { "kind", kind }, { "file", f.getFullPathName() } }));
+        };
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        const int n = capture->buffer.getNumSamples();
+        if (! opt.noWav)
+            for (const auto& part : parts)
+            {
+                const auto audio = ex::alignToGrid (jaudios::renderPart (engine, part, n, sr, opt.tail), sr, grid);
+                const auto f = dir.getChildFile (jaudios::exportFileStem (song, part.name, keyName, bpm) + ".wav");
+                if (! ex::writeWav (f, audio, sr, opt.wav))
+                {
+                    std::cerr << "error: cannot write " << f.getFullPathName() << "\n";
+                    return 1;
+                }
+                addAsset (f, jaudios::partId (part), "wav");
+            }
+        // MIDI: one file per generated part (drag one part into a track), and all of them together
+        std::vector<ex::MidiPart> midiParts { { "Chords", chordSeq }, { "Bass", bassSeq } };
+        if (opt.drums)
+            midiParts.push_back ({ "Drums", sy::drumsToMidi (drumNotes) });
+        for (const auto& mp : midiParts)
+        {
+            const auto f = dir.getChildFile (jaudios::exportFileStem (song, mp.name, keyName, bpm) + ".mid");
+            if (! ex::writeMidiFile (f, ex::makeMidiFile (song, { mp }, grid, key)))
+                return (std::cerr << "error: cannot write " << f.getFullPathName() << "\n", 1);
+            addAsset (f, mp.name.toLowerCase(), "midi");
+        }
+        const auto all = dir.getChildFile (jaudios::exportFileStem (song, "All parts", keyName, bpm) + ".mid");
+        if (! ex::writeMidiFile (all, ex::makeMidiFile (song, midiParts, grid, key)))
+            return (std::cerr << "error: cannot write " << all.getFullPathName() << "\n", 1);
+        addAsset (all, "all", "midi");
+        const auto projectFileOut = dir.getChildFile (ex::safeFileName (song) + ".jaudios.json");
+        if (! exported.save (projectFileOut))
+            return (std::cerr << "error: cannot write " << projectFileOut.getFullPathName() << "\n", 1);
+        printJson (makeObject ({
+            { "file", file.getFullPathName() },
+            { "key", keyName },
+            { "bpm", bpm },
+            { "progression", juce::String (top.summary (key)) },
+            { "grid", makeObject ({ { "origin_sec", grid.originSeconds() }, // where bar 1 starts on the source's timeline
+                                    { "first_downbeat_sec", harmony->analysis.rhythm.downbeats.empty() ? var() : var (harmony->analysis.rhythm.downbeats.front()) },
+                                    { "first_downbeat_beat", harmony->analysis.rhythm.downbeats.empty() ? var() : var (grid.toBeats (harmony->analysis.rhythm.downbeats.front())) } }) },
+            { "wav", opt.noWav ? var ("none") : var (opt.wav == ex::WavFormat::int24 ? "24-bit" : "32-bit float") },
+            { "tail_sec", opt.tail },
+            { "fx", fxApplied },
+            { "files", files },
+            { "project", projectFileOut.getFullPathName() },
+            { "export_ms", juce::Time::getMillisecondCounterHiRes() - t0 },
+        }));
+        return 0;
+    }
+
     engine.play();
 
     const int n = capture->buffer.getNumSamples();
@@ -1324,12 +1455,7 @@ int cmdAudition (const juce::File& file, AuditionOptions opt)
 
     if (opt.saveProject != juce::File())
     {
-        jaudios::ProjectInstruments p;
-        p.slots["chords"] = *jaudios::captureSlot (*chords);
-        p.slots["bass"] = *jaudios::captureSlot (*bass);
-        if (drums != nullptr)
-            p.slots["drums"] = *jaudios::captureSlot (*drums);
-        if (! p.save (opt.saveProject))
+        if (! makeProject().save (opt.saveProject))
         {
             std::cerr << "error: could not write " << opt.saveProject.getFullPathName() << "\n";
             return 1;
@@ -1584,9 +1710,10 @@ int main (int argc, char** argv)
         return cmdDrums (file, opt);
     }
 
-    if (cmd == "audition")
+    if (cmd == "audition" || cmd == "export")
     {
         AuditionOptions opt;
+        opt.exportMode = cmd == "export";
         for (int i = 3; i < argc; ++i)
         {
             const juce::String a (argv[i]);
@@ -1611,6 +1738,17 @@ int main (int argc, char** argv)
             else if (a == "--save-project" && hasValue) opt.saveProject = argFile (argv[++i]);
             else if (a == "--plugin-list" && hasValue) opt.pluginList = argFile (argv[++i]);
             else if (a == "--fx" && hasValue) opt.fx.add (argv[++i]);
+            else if (cmd == "export" && a == "--parts" && hasValue) opt.parts.addTokens (argv[++i], ",", "");
+            else if (cmd == "export" && a == "--wav" && hasValue)
+            {
+                const juce::String w (argv[++i]);
+                if (w != "24" && w != "float")
+                    return usage();
+                opt.wav = w == "24" ? jaudios::exporting::WavFormat::int24 : jaudios::exporting::WavFormat::float32;
+            }
+            else if (cmd == "export" && a == "--tail" && hasValue) opt.tail = juce::jlimit (0.0, 30.0, juce::String (argv[++i]).getDoubleValue());
+            else if (cmd == "export" && a == "--no-wav") opt.noWav = true;
+            else if (cmd == "export" && a == "--name" && hasValue) opt.name = argv[++i];
             else if (a == "--out" && hasValue) opt.out = argFile (argv[++i]);
             else return usage();
         }

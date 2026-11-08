@@ -324,6 +324,14 @@ DrumSampler::DrumSampler (const DrumKit& kit, int numVoices)
     setCurrentPlaybackSampleRate (kit.sampleRate);
 }
 
+void DrumSampler::reset()
+{
+    allNotesOff (0, false);
+    for (int i = 0; i < getNumSounds(); ++i)
+        if (auto* s = dynamic_cast<DrumSound*> (getSound (i).get()))
+            s->roundRobin.store (0, std::memory_order_relaxed);
+}
+
 void DrumSampler::noteOn (int channel, int note, float velocity)
 {
     if (soloElement && note != generators::gmNote (*soloElement))

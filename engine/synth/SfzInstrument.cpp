@@ -122,6 +122,7 @@ void DrumInstrument::prepare (double sampleRate, int)
         sampler = std::make_unique<DrumSampler> (kit);
     }
     sampler->setCurrentPlaybackSampleRate (sampleRate);
+    sampler->reset(); // prepared = back to the start: same round-robin cycle every render
 }
 
 void DrumInstrument::process (juce::AudioBuffer<float>& out, const juce::MidiBuffer& midi) noexcept
