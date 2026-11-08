@@ -8,8 +8,17 @@ namespace gen = generators;
 MainComponent::MainComponent()
 {
     setLookAndFeel (&lookAndFeel);
-    for (auto* b : { &openButton, &playButton, &undoButton, &redoButton, &settingsButton })
+    for (auto* b : { &openButton, &recordButton, &playButton, &undoButton, &redoButton, &settingsButton })
         addAndMakeVisible (b);
+    addAndMakeVisible (meter);
+    recordButton.setTooltip ("Record what your DAW or any app plays (R)");
+    recordButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffd9534f));
+    recordButton.onClick = [this] {
+        if (recorder.isRecording())
+            stopCapture();
+        else
+            showCaptureMenu(); // the button always asks; R reuses the last source
+    };
     for (auto* l : { &positionLabel, &songLabel, &statusLabel })
         addAndMakeVisible (l);
     addAndMakeVisible (styleBox);
@@ -41,12 +50,13 @@ MainComponent::MainComponent()
             song->selectProgression (progressionBox.getSelectedId() - 1);
     };
     view.onStatus = [this] (const juce::String& s) { setStatus (s); };
+    view.onRecordKey = [this] { toggleRecording(); };
     view.onSongChanged = [this] { refreshTransport(); };
 
     deviceError = engine.openDefaultDevice (AudioEngine::defaultBlockSize);
     setStatus (deviceError.isNotEmpty() ? "Audio device: " + deviceError : juce::String ("Ready"));
     refreshTransport();
-    setWantsKeyboardFocus (false);
+    setWantsKeyboardFocus (true); // R and Space before a song is loaded
     setSize (1280, 640);
     startTimerHz (15);
 }
@@ -54,6 +64,8 @@ MainComponent::MainComponent()
 MainComponent::~MainComponent()
 {
     stopTimer();
+    if (captureSource != nullptr)
+        captureSource->stop();
     analysisService.cancelAll();
     view.setSong (nullptr, {}, {});
     song.reset();
@@ -77,11 +89,13 @@ void MainComponent::resized()
 {
     auto area = getLocalBounds();
     auto bar = area.removeFromTop (48).reduced (8, 8);
-    for (auto* b : { &openButton, &playButton })
+    for (auto* b : { &openButton, &recordButton, &playButton })
     {
         b->setBounds (bar.removeFromLeft (76));
         bar.removeFromLeft (6);
     }
+    meter.setBounds (bar.removeFromLeft (8).reduced (0, 2));
+    bar.removeFromLeft (4);
     positionLabel.setBounds (bar.removeFromLeft (120));
     bar.removeFromLeft (6);
     settingsButton.setBounds (bar.removeFromRight (76));
@@ -155,16 +169,21 @@ void MainComponent::showOpenDialog()
 
 void MainComponent::importFile (const juce::File& file)
 {
+    analyse ([this, file] { return importer.importFile (file); }, file.getFileName());
+}
+
+void MainComponent::analyse (std::function<analysis::ImportResult()> load, const juce::String& what)
+{
     if (importing)
         return;
     importing = true;
-    setStatus ("Analysing " + file.getFileName() + " (key, beats, notes, chord suggestions)...");
+    setStatus ("Analysing " + what + " (key, beats, notes, chord suggestions)...");
     SongSettings settings;
     settings.engine.style = (gen::Style) juce::jmax (0, styleBox.getSelectedId() - 1);
     analysisService.submit<ImportJobResult> (
-        [this, file, settings] {
+        [this, load, settings] {
             ImportJobResult r;
-            r.import = importer.importFile (file);
+            r.import = load();
             if (r.import.ok())
             {
                 r.peaks = gui::WaveformPeaks::compute (r.import.capture->buffer, r.import.capture->sampleRate);
@@ -189,7 +208,8 @@ void MainComponent::onImported (ImportJobResult r)
         return;
     }
     auto& capture = *r.import.capture;
-    songName = capture.sourceFile.getFileNameWithoutExtension();
+    songName = capture.sourceFile != juce::File() ? capture.sourceFile.getFileNameWithoutExtension()
+                                                  : "Capture " + juce::Time (capture.startTimeMs).formatted ("%H.%M.%S");
     engine.stop();
     view.setSong (nullptr, {}, {});
     song.reset();
@@ -205,6 +225,15 @@ void MainComponent::onImported (ImportJobResult r)
 
 void MainComponent::timerCallback()
 {
+    if (recorder.isRecording())
+    {
+        const int s = (int) recorder.elapsedSeconds();
+        positionLabel.setText (juce::String::formatted ("REC %d:%02d", s / 60, s % 60), juce::dontSendNotification);
+        meter.level = juce::jmax (meter.level * 0.7f, recorder.takePeak());
+        meter.repaint();
+        recordButton.setButtonText ("Stop");
+        return;
+    }
     if (song == nullptr)
     {
         positionLabel.setText ("--", juce::dontSendNotification);
@@ -219,6 +248,98 @@ void MainComponent::timerCallback()
     playButton.setButtonText (player.isPlaying() ? "Stop" : "Play");
     undoButton.setEnabled (song->undoManager().canUndo());
     redoButton.setEnabled (song->undoManager().canRedo());
+}
+
+bool MainComponent::keyPressed (const juce::KeyPress& key)
+{
+    if (key.getKeyCode() == 'r' || key.getKeyCode() == 'R')
+        return toggleRecording(), true;
+    if (key == juce::KeyPress::spaceKey)
+        return view.togglePlay(), true;
+    return false;
+}
+
+void MainComponent::toggleRecording()
+{
+    if (recorder.isRecording())
+        stopCapture();
+    else if (lastCaptureSource.isNotEmpty())
+        startCapture (lastCaptureSource);
+    else
+        showCaptureMenu();
+}
+
+void MainComponent::showCaptureMenu()
+{
+    juce::String error;
+    const auto sources = listCaptureSources (error);
+    juce::PopupMenu menu;
+    menu.addSectionHeader ("Record from");
+    int id = 1;
+    juce::String kind;
+    for (const auto& s : sources)
+    {
+        if (s.kind != kind && id > 1)
+            menu.addSeparator();
+        kind = s.kind;
+        menu.addItem (id++, s.name, true, s.id == lastCaptureSource);
+    }
+    if (sources.empty())
+        menu.addItem (-1, "No capture source: install BlackHole, or use macOS 13+", false, false);
+    if (error.isNotEmpty())
+        menu.addItem (-2, error, false, false);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (recordButton), [this, sources] (int chosen) {
+        if (chosen > 0 && chosen <= (int) sources.size())
+            startCapture (sources[(size_t) chosen - 1].id);
+    });
+}
+
+void MainComponent::startCapture (const juce::String& sourceId)
+{
+    juce::String error;
+    captureSource = makeCaptureSource (sourceId, error);
+    if (captureSource == nullptr || ! captureSource->start (recorder, error))
+    {
+        captureSource.reset();
+        setStatus ("Cannot record: " + error);
+        return;
+    }
+    lastCaptureSource = sourceId;
+    engine.stop(); // the capture is what you hear now
+    recordButton.setToggleState (true, juce::dontSendNotification);
+    setStatus ("Recording " + captureSource->name() + ". Play your song, then press R or Stop.");
+}
+
+void MainComponent::stopCapture()
+{
+    if (captureSource != nullptr)
+        captureSource->stop();
+    captureSource.reset();
+    juce::String error;
+    auto captured = recorder.stop (error);
+    recordButton.setToggleState (false, juce::dontSendNotification);
+    recordButton.setButtonText ("Record");
+    meter.level = 0.0f;
+    meter.repaint();
+    if (! captured)
+    {
+        setStatus ("Nothing recorded: " + error);
+        return;
+    }
+    if (recorder.droppedSamples() > 0)
+        setStatus ("Note: " + juce::String (recorder.droppedSamples()) + " samples were lost while recording");
+    auto shared = std::make_shared<analysis::CaptureResult> (std::move (*captured));
+    analyse ([shared] { analysis::ImportResult r; r.capture = std::move (*shared); return r; }, "the capture");
+}
+
+void MainComponent::LevelMeter::paint (juce::Graphics& g)
+{
+    const auto r = getLocalBounds().toFloat();
+    g.setColour (gui::colours::outline);
+    g.fillRoundedRectangle (r, 2.0f);
+    const float h = r.getHeight() * juce::jlimit (0.0f, 1.0f, level);
+    g.setColour (level > 0.98f ? juce::Colour (0xffd9534f) : gui::colours::source);
+    g.fillRoundedRectangle (r.withTop (r.getBottom() - h), 2.0f);
 }
 
 void MainComponent::showAudioSettings()

@@ -2,6 +2,8 @@
 add_library(app_core STATIC
     core/AnalysisService.cpp
     core/AudioEngine.cpp
+    core/CaptureRecorder.cpp
+    core/CaptureSources.cpp
     core/EngineProcessors.cpp
     core/ExportService.cpp
     core/HarmonySource.cpp
@@ -17,6 +19,15 @@ target_link_libraries(app_core
     PUBLIC  jaudios_juce engine_analysis engine_theory engine_generators engine_synth engine_fx engine_export
     PRIVATE jaudios_warnings)
 target_compile_definitions(app_core PUBLIC JAUDIOS_VERSION_STRING="${PROJECT_VERSION}")
+# Live capture: ScreenCaptureKit system / app audio on macOS 13+ (weak-linked: the app still runs on
+# older macOS and falls back to input devices); input devices everywhere else.
+if(APPLE)
+    target_sources(app_core PRIVATE platform/mac/SystemAudioCapture.mm)
+    set_source_files_properties(platform/mac/SystemAudioCapture.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    target_link_libraries(app_core PUBLIC "-weak_framework ScreenCaptureKit" "-framework CoreMedia" "-framework AVFoundation")
+else()
+    target_sources(app_core PRIVATE platform/SystemAudioCaptureStub.cpp)
+endif()
 
 # Interposing hooks for tools/rt_check.sh. Object library so the symbols end up in the
 # executable itself (needed for malloc interposition); never linked into the app.

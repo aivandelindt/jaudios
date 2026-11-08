@@ -167,6 +167,11 @@ bool SongView::keyPressed (const juce::KeyPress& key)
         togglePlay();
         return true;
     }
+    if ((key.getKeyCode() == 'R' || key.getKeyCode() == 'r') && onRecordKey) // with or without a song
+    {
+        onRecordKey();
+        return true;
+    }
     if (song == nullptr)
         return false;
     const auto cmd = juce::ModifierKeys::commandModifier;
@@ -176,12 +181,6 @@ bool SongView::keyPressed (const juce::KeyPress& key)
         return song->undoManager().redo(), true;
     if (key == juce::KeyPress ('0', cmd, 0))
         return model.showAll(), true;
-    if (key.getKeyCode() == 'R' || key.getKeyCode() == 'r')
-    {
-        if (onStatus)
-            onStatus ("Recording comes with live capture (next milestone)");
-        return true;
-    }
     return false;
 }
 

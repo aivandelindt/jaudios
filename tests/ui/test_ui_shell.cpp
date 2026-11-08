@@ -408,3 +408,17 @@ TEST_CASE ("Bass lane: click cycles a note's accent; a switched-off note can be 
     CHECK (f.song->bassVelocity (step) == note.velocity);
     CHECK_FALSE (f.song->isBassNoteEdited (step));
 }
+
+TEST_CASE ("R asks the window to record, with or without a song", "[ui][view][capture]")
+{
+    Fixture f;
+    int presses = 0;
+    f.view.onRecordKey = [&] { ++presses; };
+    CHECK (f.view.keyPressed (juce::KeyPress ('r', {}, 'r')));
+    CHECK (f.view.keyPressed (juce::KeyPress ('R', juce::ModifierKeys::shiftModifier, 'R')));
+    CHECK (presses == 2);
+    SongView empty;
+    empty.onRecordKey = [&] { ++presses; };
+    CHECK (empty.keyPressed (juce::KeyPress ('r', {}, 'r')));
+    CHECK (presses == 3);
+}

@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### Live capture (M11, audio-capture)
+- `analysis::makeCaptureResult()`: the raw-audio → 44.1 kHz float conversion. File import now goes through it, and so do live
+  captures, so the same samples always give the same buffer.
+- `app/core/CaptureRecorder`:
+  - The capture callback pushes into a lock-free ring: no allocation, no lock, and AudioBuffer's `isClear` flag is never touched
+    across threads. It keeps a peak meter and a dropout counter.
+  - A writer thread drains the ring into memory and, past 5 minutes, into a temp float WAV, so there is no length limit.
+  - Exact digital silence before and after the music is trimmed.
+  - `stop()` returns a `CaptureResult`.
+- `app/core/CaptureSources`: `system`, `app:<bundle id>` and `device:<input>` sources, with listing.
+  - `DeviceCaptureSource`: any input through JUCE (BlackHole, an aggregate device, an interface), on every platform.
+  - `app/platform/mac/SystemAudioCapture.mm` (ARC; ScreenCaptureKit weak-linked): macOS 13+ system audio, or one app's audio (the
+    DAW), with JAudios' own output excluded. No driver; it needs the Screen & System Audio Recording permission, and errors say
+    where to grant it. Other platforms use a stub (Windows WASAPI loopback is a later step).
+- App: a **Record** button with a source menu (system audio, each running app, input devices) and a level meter. "REC m:ss" shows in
+  the position display. R starts and stops with the last source. On stop, the capture runs through the same analysis as an opened
+  file.
+- `app-cli capture --list-sources | --source ID --seconds N [--no-trim] --out FILE`, and `capture --simulate FILE`: a file's decoded
+  samples are streamed through the capture path like a device, and the result is compared with importing the file.
+- Tests:
+  - recorder: sample-exact under random block sizes from another thread; trimming; temp-file spill identical to memory; dropouts
+    counted;
+  - an input device driven through its callbacks at 48 kHz;
+  - unique source ids;
+  - `[rt]`: `push()` allocates nothing;
+  - the acceptance: a 48 kHz song as a file and as a capture stream gives a bit-identical buffer and an identical analysis;
+  - R reaches the window, with or without a song.
+- macOS CI: lists the sources (system audio available); runs `--simulate` on the fixture WAV and on an AAC (`.m4a`) copy made with
+  `afconvert` (Core Audio decoding); tries a 2 s system capture as a diagnostic (the runner doesn't grant the permission).
+
 ### UI shell, part 2 (M10b, ui-shell): accent editor, background WAV export
 - **Accent editor** (`SongController` + the bass and drum lanes):
   - Drum hits are addressed by element, bar and 1/16 step (the generator's grid). Bass notes are addressed by their 1/16 step on the

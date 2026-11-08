@@ -44,6 +44,12 @@
 //                                               rendered through the engine graph (FX and tails) and
 //                                               type-1 MIDI (tempo map, key signature, track names),
 //                                               plus <name>.jaudios.json listing them
+//   app-cli capture --list-sources | --source ID [--seconds N] [--no-trim] [--out FILE.wav]
+//                                               live capture (system / app audio on macOS 13+, any input
+//                                               device), written as the analysis gets it (44.1 kHz)
+//   app-cli capture --simulate FILE [--speed X]   streams a file's decoded samples through the capture
+//                                               path like a device and checks the result equals importing
+//                                               the file (buffer and analysis)
 //   app-cli plugins scan [--path DIR]... [--plugin-list FILE] [--timeout SEC]
 //                                               scans VST3s out of process (default: the standard VST3
 //                                               folders) into the known-plugin list
@@ -51,6 +57,7 @@
 
 #include "app/core/AnalysisService.h"
 #include "app/core/AudioEngine.h"
+#include "app/core/CaptureSources.h"
 #include "app/core/ExportService.h"
 #include "app/core/HarmonySource.h"
 #include "app/core/InstrumentSlot.h"
@@ -126,6 +133,8 @@ int usage()
                  "  app-cli audition --list-presets | --list-fx\n"
                  "  app-cli export <audio-file> [audition options] [--parts mix,chords,bass,drums,stems]\n"
                  "                   [--wav 24|float] [--tail SEC] [--no-wav] [--name NAME] [--out DIR]\n"
+                 "  app-cli capture --list-sources | --source ID [--seconds N] [--no-trim] [--out FILE.wav]\n"
+                 "  app-cli capture --simulate FILE [--speed X]\n"
                  "  app-cli plugins scan [--path DIR]... [--plugin-list FILE] [--timeout SEC]\n"
                  "  app-cli plugins list [--plugin-list FILE]\n";
     return 2;
@@ -964,6 +973,126 @@ var describePlugin (const juce::PluginDescription& d)
                          { "version", d.version }, { "instrument", d.isInstrument }, { "file", d.fileOrIdentifier } });
 }
 
+int cmdCapture (int argc, char** argv)
+{
+    juce::String sourceId, simulate;
+    double seconds = 10.0, speed = 8.0;
+    bool list = false, trim = true;
+    juce::File out;
+    for (int i = 2; i < argc; ++i)
+    {
+        const juce::String a (argv[i]);
+        const bool hasValue = i + 1 < argc;
+        if (a == "--list-sources") list = true;
+        else if (a == "--source" && hasValue) sourceId = argv[++i];
+        else if (a == "--seconds" && hasValue) seconds = juce::jlimit (0.5, 3600.0, juce::String (argv[++i]).getDoubleValue());
+        else if (a == "--simulate" && hasValue) simulate = argv[++i];
+        else if (a == "--speed" && hasValue) speed = juce::jlimit (0.0, 1000.0, juce::String (argv[++i]).getDoubleValue());
+        else if (a == "--no-trim") trim = false;
+        else if (a == "--out" && hasValue) out = argFile (argv[++i]);
+        else return usage();
+    }
+    if (list)
+    {
+        juce::String error;
+        juce::Array<var> sources;
+        for (const auto& s : jaudios::listCaptureSources (error))
+            sources.add (makeObject ({ { "id", s.id }, { "name", s.name }, { "kind", s.kind } }));
+        printJson (makeObject ({ { "system_audio_available", jaudios::platform::systemAudioCaptureAvailable() },
+                                 { "sources", sources }, { "error", error.isNotEmpty() ? var (error) : var() } }));
+        return 0;
+    }
+
+    if (simulate.isNotEmpty())
+    {
+        // the file's decoded samples, at its own rate, through the capture path (paced like a device)
+        const auto file = argFile (simulate);
+        jaudios::analysis::AudioImporter importer;
+        const auto imported = importer.importFile (file);
+        if (! imported.ok())
+            return (std::cerr << "error: " << imported.error << "\n", 1);
+        juce::AudioFormatManager formats;
+        formats.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
+        if (reader == nullptr)
+            return (std::cerr << "error: cannot decode " << file.getFullPathName() << "\n", 1);
+        juce::AudioBuffer<float> raw ((int) reader->numChannels, (int) reader->lengthInSamples);
+        reader->read (&raw, 0, raw.getNumSamples(), 0, true, true);
+        jaudios::CaptureRecorder::Settings settings;
+        settings.trimSilence = false; // compared with the file as it is (see app-cli capture --source for trimming)
+        jaudios::CaptureRecorder rec (settings);
+        rec.start (reader->sampleRate, raw.getNumChannels(), "simulated device");
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        const float* ptrs[2] {};
+        for (int pos = 0; pos < raw.getNumSamples();)
+        {
+            const int n = std::min (512, raw.getNumSamples() - pos);
+            for (int ch = 0; ch < std::min (2, raw.getNumChannels()); ++ch)
+                ptrs[ch] = raw.getReadPointer (ch, pos);
+            rec.push (ptrs, std::min (2, raw.getNumChannels()), n);
+            pos += n;
+            if (speed > 0.0)
+                while (juce::Time::getMillisecondCounterHiRes() < t0 + pos / reader->sampleRate * 1000.0 / speed)
+                    juce::Thread::sleep (1);
+        }
+        juce::String error;
+        const auto captured = rec.stop (error);
+        if (! captured)
+            return (std::cerr << "error: " << error << "\n", 1);
+        const auto& a = imported.capture->buffer;
+        const auto& b = captured->buffer;
+        bool same = a.getNumSamples() == b.getNumSamples() && a.getNumChannels() == b.getNumChannels();
+        for (int ch = 0; same && ch < a.getNumChannels(); ++ch)
+            same = std::memcmp (a.getReadPointer (ch), b.getReadPointer (ch), sizeof (float) * (size_t) a.getNumSamples()) == 0;
+        auto keyDetector = jaudios::analysis::makeKeyDetector (jaudios::analysis::AppConfig::fromEnvironment());
+        auto ra = jaudios::analysis::analyze (*imported.capture, *keyDetector.detector);
+        auto rb = jaudios::analysis::analyze (*captured, *keyDetector.detector);
+        ra.keyMs = rb.keyMs = ra.rhythmMs = rb.rhythmMs = 0.0;
+        const auto ja = juce::JSON::toString (jaudios::analysis::toJson (ra, *imported.capture));
+        const auto jb = juce::JSON::toString (jaudios::analysis::toJson (rb, *imported.capture));
+        printJson (makeObject ({ { "file", file.getFullPathName() }, { "format", reader->getFormatName() },
+                                 { "original_sample_rate", reader->sampleRate }, { "samples", b.getNumSamples() },
+                                 { "dropped_samples", rec.droppedSamples() },
+                                 { "identical_buffer", same }, { "identical_analysis", ja == jb },
+                                 { "key", juce::String (jaudios::theory::traditionalName (rb.key.top3.empty() ? jaudios::theory::Key {} : rb.key.top3[0].key)) },
+                                 { "bpm", rb.rhythm.bpm } }));
+        return same && ja == jb && rec.droppedSamples() == 0 ? 0 : 1;
+    }
+
+    if (sourceId.isEmpty())
+        return usage();
+    juce::String error;
+    auto source = jaudios::makeCaptureSource (sourceId, error);
+    if (source == nullptr)
+        return (std::cerr << "error: " << error << "\n", 1);
+    jaudios::CaptureRecorder::Settings settings;
+    settings.trimSilence = trim;
+    jaudios::CaptureRecorder rec (settings);
+    if (! source->start (rec, error))
+        return (std::cerr << "error: " << error << "\n", 1);
+    std::cerr << "recording " << source->name() << " for " << seconds << " s\n";
+    float loudest = 0.0f;
+    const auto until = juce::Time::getMillisecondCounterHiRes() + seconds * 1000.0;
+    while (juce::Time::getMillisecondCounterHiRes() < until)
+    {
+        juce::Thread::sleep (100);
+        loudest = std::max (loudest, rec.takePeak());
+    }
+    source->stop();
+    const auto captured = rec.stop (error);
+    if (! captured)
+        return (std::cerr << "error: " << error << "\n", 1);
+    if (out == juce::File())
+        out = juce::File::getCurrentWorkingDirectory().getChildFile ("capture.wav");
+    bool ok = true;
+    writeWav (out, captured->buffer, captured->sampleRate, ok);
+    printJson (makeObject ({ { "source", source->name() }, { "original_sample_rate", captured->originalSampleRate },
+                             { "seconds", captured->durationSeconds() }, { "peak_dbfs", juce::Decibels::gainToDecibels (loudest, -120.0f) },
+                             { "dropped_samples", rec.droppedSamples() }, { "spilled_to_file", rec.spilledToFile() },
+                             { "out", out.getFullPathName() } }));
+    return ok ? 0 : 1;
+}
+
 int cmdPlugins (int argc, char** argv)
 {
     if (argc < 3)
@@ -1424,6 +1553,8 @@ int main (int argc, char** argv)
         return cmdListFx();
     if (cmd == "plugins")
         return cmdPlugins (argc, argv);
+    if (cmd == "capture")
+        return cmdCapture (argc, argv);
 
     if (argc < 3)
         return usage();
