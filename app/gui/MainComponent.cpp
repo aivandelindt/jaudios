@@ -3,62 +3,125 @@
 namespace jaudios
 {
 
+namespace gen = generators;
+
 MainComponent::MainComponent()
 {
-    for (auto* b : { &settingsButton, &openButton, &playButton, &stopButton })
+    setLookAndFeel (&lookAndFeel);
+    for (auto* b : { &openButton, &playButton, &undoButton, &redoButton, &settingsButton })
         addAndMakeVisible (b);
+    for (auto* l : { &positionLabel, &songLabel, &statusLabel })
+        addAndMakeVisible (l);
+    addAndMakeVisible (styleBox);
+    addAndMakeVisible (progressionBox);
+    addAndMakeVisible (view);
 
-    addAndMakeVisible (waveform);
-    addAndMakeVisible (statusLabel);
-    statusLabel.setJustificationType (juce::Justification::topLeft);
+    positionLabel.setFont (juce::FontOptions (18.0f, juce::Font::bold));
+    positionLabel.setJustificationType (juce::Justification::centred);
+    songLabel.setColour (juce::Label::textColourId, gui::colours::textDim);
+    statusLabel.setColour (juce::Label::textColourId, gui::colours::textDim);
+    for (int s = 0; s < 7; ++s)
+        styleBox.addItem (juce::String (gen::styleName ((gen::Style) s)).toUpperCase().substring (0, 1)
+                              + juce::String (gen::styleName ((gen::Style) s)).substring (1), s + 1);
+    styleBox.setSelectedId (1, juce::dontSendNotification);
+    styleBox.setTooltip ("Style: picks the progressions, the bass and drum patterns and the sounds");
+    progressionBox.setTooltip ("Suggested progressions, best first");
 
-    settingsButton.onClick = [this] { showAudioSettings(); };
     openButton.onClick = [this] { showOpenDialog(); };
-    playButton.onClick = [this] { engine.play(); };
-    stopButton.onClick = [this] { engine.stop(); };
-    waveform.onSeek = [this] (double t) { engine.seek ((juce::int64) (t * analysis::analysisSampleRate)); };
+    playButton.onClick = [this] { view.togglePlay(); };
+    settingsButton.onClick = [this] { showAudioSettings(); };
+    undoButton.onClick = [this] { if (song != nullptr) song->undoManager().undo(); };
+    redoButton.onClick = [this] { if (song != nullptr) song->undoManager().redo(); };
+    styleBox.onChange = [this] {
+        if (song != nullptr)
+            song->setStyle ((gen::Style) (styleBox.getSelectedId() - 1));
+    };
+    progressionBox.onChange = [this] {
+        if (song != nullptr && progressionBox.getSelectedId() > 0 && progressionBox.getSelectedId() - 1 != song->progressionIndex())
+            song->selectProgression (progressionBox.getSelectedId() - 1);
+    };
+    view.onStatus = [this] (const juce::String& s) { setStatus (s); };
+    view.onSongChanged = [this] { refreshTransport(); };
 
     deviceError = engine.openDefaultDevice (AudioEngine::defaultBlockSize);
-
-    setSize (1000, 560);
-    startTimerHz (30);
-    updateStatus();
+    setStatus (deviceError.isNotEmpty() ? "Audio device: " + deviceError : juce::String ("Ready"));
+    refreshTransport();
+    setWantsKeyboardFocus (false);
+    setSize (1280, 640);
+    startTimerHz (15);
 }
 
 MainComponent::~MainComponent()
 {
     stopTimer();
     analysisService.cancelAll();
+    view.setSong (nullptr, {}, {});
+    song.reset();
     engine.closeDevice();
+    setLookAndFeel (nullptr);
 }
 
 void MainComponent::paint (juce::Graphics& g)
 {
-    g.fillAll (getLookAndFeel().findColour (juce::ResizableWindow::backgroundColourId));
-
+    g.fillAll (gui::colours::background);
+    g.setColour (gui::colours::panel);
+    g.fillRect (getLocalBounds().removeFromTop (48));
     if (dragHover)
     {
-        g.setColour (juce::Colour (0xff5fb3c9));
-        g.drawRect (waveform.getBounds().expanded (3), 2);
+        g.setColour (gui::colours::source);
+        g.drawRect (view.getBounds().expanded (2), 2);
     }
 }
 
 void MainComponent::resized()
 {
-    auto area = getLocalBounds().reduced (12);
-    auto row = area.removeFromTop (32);
-
-    for (auto* b : { &openButton, &playButton, &stopButton })
+    auto area = getLocalBounds();
+    auto bar = area.removeFromTop (48).reduced (8, 8);
+    for (auto* b : { &openButton, &playButton })
     {
-        b->setBounds (row.removeFromLeft (90));
-        row.removeFromLeft (8);
+        b->setBounds (bar.removeFromLeft (76));
+        bar.removeFromLeft (6);
     }
-    settingsButton.setBounds (row.removeFromRight (150));
+    positionLabel.setBounds (bar.removeFromLeft (120));
+    bar.removeFromLeft (6);
+    settingsButton.setBounds (bar.removeFromRight (76));
+    bar.removeFromRight (12);
+    redoButton.setBounds (bar.removeFromRight (60));
+    bar.removeFromRight (4);
+    undoButton.setBounds (bar.removeFromRight (60));
+    bar.removeFromRight (12);
+    progressionBox.setBounds (bar.removeFromRight (260));
+    bar.removeFromRight (6);
+    styleBox.setBounds (bar.removeFromRight (110));
+    bar.removeFromRight (12);
+    songLabel.setBounds (bar);
+    statusLabel.setBounds (area.removeFromBottom (24).reduced (8, 2));
+    view.setBounds (area);
+}
 
-    area.removeFromTop (10);
-    waveform.setBounds (area.removeFromTop (200));
-    area.removeFromTop (10);
-    statusLabel.setBounds (area);
+void MainComponent::setStatus (const juce::String& s) { statusLabel.setText (s, juce::dontSendNotification); }
+
+void MainComponent::refreshTransport()
+{
+    const bool has = song != nullptr;
+    for (juce::Component* c : { (juce::Component*) &playButton, (juce::Component*) &styleBox, (juce::Component*) &progressionBox })
+        c->setEnabled (has);
+    undoButton.setEnabled (has && song->undoManager().canUndo());
+    redoButton.setEnabled (has && song->undoManager().canRedo());
+    if (! has)
+    {
+        songLabel.setText ("No song", juce::dontSendNotification);
+        return;
+    }
+    const auto& a = song->song();
+    songLabel.setText (songName + "   " + juce::String (theory::traditionalName (a.source.key)) + "   "
+                           + juce::String (a.analysis.rhythm.bpm, 1) + " BPM",
+                       juce::dontSendNotification);
+    styleBox.setSelectedId ((int) song->style() + 1, juce::dontSendNotification);
+    progressionBox.clear (juce::dontSendNotification);
+    for (int i = 0; i < song->numProgressions(); ++i)
+        progressionBox.addItem (juce::String (i + 1) + ".  " + song->suggestion (i).summary (a.source.key), i + 1);
+    progressionBox.setSelectedId (song->progressionIndex() + 1, juce::dontSendNotification);
 }
 
 bool MainComponent::isInterestedInFileDrag (const juce::StringArray& files)
@@ -82,10 +145,9 @@ void MainComponent::filesDropped (const juce::StringArray& files, int, int)
 
 void MainComponent::showOpenDialog()
 {
-    chooser = std::make_unique<juce::FileChooser> ("Import audio", juce::File(), importer.getWildcardForAllFormats());
+    chooser = std::make_unique<juce::FileChooser> ("Open a song", juce::File(), importer.getWildcardForAllFormats());
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-                          [this] (const juce::FileChooser& fc)
-                          {
+                          [this] (const juce::FileChooser& fc) {
                               if (fc.getResult().existsAsFile())
                                   importFile (fc.getResult());
                           });
@@ -95,21 +157,18 @@ void MainComponent::importFile (const juce::File& file)
 {
     if (importing)
         return;
-
     importing = true;
-    importStatus = "Importing and analysing " + file.getFileName() + "...";
-    analysisStatus = {};
-    updateStatus();
-
+    setStatus ("Analysing " + file.getFileName() + " (key, beats, notes, chord suggestions)...");
+    SongSettings settings;
+    settings.engine.style = (gen::Style) juce::jmax (0, styleBox.getSelectedId() - 1);
     analysisService.submit<ImportJobResult> (
-        [this, file]
-        {
+        [this, file, settings] {
             ImportJobResult r;
             r.import = importer.importFile (file);
             if (r.import.ok())
             {
-                r.peaks = WaveformPeaks::compute (r.import.capture->buffer, r.import.capture->sampleRate);
-                r.analysis = analysis::analyze (*r.import.capture, *keyDetector.detector);
+                r.peaks = gui::WaveformPeaks::compute (r.import.capture->buffer, r.import.capture->sampleRate);
+                r.song = analyseSong (*r.import.capture, settings, r.error, keyDetector.detector.get());
             }
             return r;
         },
@@ -119,83 +178,53 @@ void MainComponent::importFile (const juce::File& file)
 void MainComponent::onImported (ImportJobResult r)
 {
     importing = false;
-
     if (! r.import.ok())
     {
-        importStatus = "Import failed: " + r.import.error;
-        updateStatus();
+        setStatus ("Could not open the file: " + r.import.error);
         return;
     }
-
-    auto& c = *r.import.capture;
-    importStatus = c.sourceFile.getFileName() + " - " + c.formatName + ", "
-                 + juce::String (c.originalSampleRate, 0) + " Hz -> " + juce::String (c.sampleRate, 0) + " Hz, "
-                 + juce::String (c.originalNumChannels) + " ch, " + juce::String (c.durationSeconds(), 2) + " s";
-
-    engine.stop();
-    engine.setSource (std::make_shared<const juce::AudioBuffer<float>> (std::move (c.buffer)));
-    waveform.setPeaks (std::move (r.peaks));
-
-    if (r.analysis)
+    if (! r.song)
     {
-        const auto& a = *r.analysis;
-        waveform.setBarGrid (a.rhythm.downbeats, a.rhythm.beats);
-
-        if (! a.key.top3.empty())
-        {
-            analysisStatus << "Key: " << theory::traditionalName (a.key.top3[0].key) << " ("
-                           << theory::camelot (a.key.top3[0].key) << " / " << theory::openKey (a.key.top3[0].key) << ")";
-            if (a.key.lowConfidence)
-                analysisStatus << "  [low confidence]";
-            if (a.key.scoresAvailable && a.key.top3.size() > 1) // the sidecar returns no alternatives
-            {
-                analysisStatus << "   alternatives: ";
-                for (size_t i = 1; i < a.key.top3.size(); ++i)
-                    analysisStatus << theory::camelot (a.key.top3[i].key) << (i + 1 < a.key.top3.size() ? ", " : "");
-            }
-        }
-        analysisStatus << "\nTempo: " << juce::String (a.rhythm.bpm, 2) << " BPM"
-                       << (a.rhythm.fixedTempo ? " (fixed grid)" : "") << ", " << (int) a.rhythm.bars.size() << " bars";
-        if (a.key.warning.isNotEmpty())
-            analysisStatus << "\n" << a.key.warning;
-        else if (keyDetector.warning.isNotEmpty())
-            analysisStatus << "\n" << keyDetector.warning;
+        setStatus ("Analysis failed: " + r.error);
+        return;
     }
-    updateStatus();
+    auto& capture = *r.import.capture;
+    songName = capture.sourceFile.getFileNameWithoutExtension();
+    engine.stop();
+    view.setSong (nullptr, {}, {});
+    song.reset();
+    song = std::make_unique<SongController> (engine, std::make_shared<const SongAnalysis> (std::move (*r.song)),
+                                             std::make_shared<const juce::AudioBuffer<float>> (std::move (capture.buffer)),
+                                             (gen::Style) juce::jmax (0, styleBox.getSelectedId() - 1));
+    song->setSongName (songName);
+    view.setSong (song.get(), std::move (r.peaks), dragSession.directory());
+    view.grabKeyboardFocus();
+    refreshTransport();
+    setStatus ("Click a chord for alternatives, drag a tile into your DAW. Space plays, Cmd+Z undoes.");
 }
 
 void MainComponent::timerCallback()
 {
-    auto& player = engine.getSourcePlayer();
-    player.collectGarbage();
-    waveform.setPlayheadSec ((double) player.getPosition() / analysis::analysisSampleRate);
-}
-
-void MainComponent::updateStatus()
-{
-    juce::String text;
-
-    if (deviceError.isNotEmpty())
-        text << "Audio device: " << deviceError << "\n";
-    else if (auto* device = engine.getDeviceManager().getCurrentAudioDevice())
-        text << "Audio device: " << device->getName() << " @ " << device->getCurrentSampleRate() << " Hz, "
-             << device->getCurrentBufferSizeSamples() << " samples, output latency "
-             << juce::String (engine.getOutputLatencyMs(), 2) << " ms\n";
-
-    if (importStatus.isNotEmpty())
-        text << importStatus << "\n";
-    if (analysisStatus.isNotEmpty())
-        text << analysisStatus << "\n";
-
-    statusLabel.setText (text, juce::dontSendNotification);
+    if (song == nullptr)
+    {
+        positionLabel.setText ("--", juce::dontSendNotification);
+        return;
+    }
+    const auto& player = engine.getSourcePlayer();
+    const double t = (double) player.getPosition() / song->song().sampleRate;
+    const double beat = std::max (0.0, song->grid().toBeats (t) + 1e-6); // bar 1 may start a few ms in
+    const int bar = (int) std::floor (beat / song->grid().beatsPerBar()) + 1;
+    const int beatInBar = (int) std::floor (std::fmod (std::max (0.0, beat), (double) song->grid().beatsPerBar())) + 1;
+    positionLabel.setText (juce::String (bar) + "." + juce::String (beatInBar), juce::dontSendNotification);
+    playButton.setButtonText (player.isPlaying() ? "Stop" : "Play");
+    undoButton.setEnabled (song->undoManager().canUndo());
+    redoButton.setEnabled (song->undoManager().canRedo());
 }
 
 void MainComponent::showAudioSettings()
 {
-    auto selector = std::make_unique<juce::AudioDeviceSelectorComponent> (
-        engine.getDeviceManager(), 0, 2, 0, 2, false, false, true, false);
+    auto selector = std::make_unique<juce::AudioDeviceSelectorComponent> (engine.getDeviceManager(), 0, 2, 0, 2, false, false, true, false);
     selector->setSize (500, 400);
-
     juce::DialogWindow::LaunchOptions options;
     options.content.setOwned (selector.release());
     options.dialogTitle = "Audio settings";

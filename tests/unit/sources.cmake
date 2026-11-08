@@ -32,4 +32,6 @@ set(JAUDIOS_TEST_SOURCES
     # fx-chain
     ${CMAKE_CURRENT_LIST_DIR}/test_fx.cpp
     # export-and-drag-drop
-    ${CMAKE_CURRENT_LIST_DIR}/test_export.cpp)
+    ${CMAKE_CURRENT_LIST_DIR}/test_export.cpp
+    # ui-shell
+    ${CMAKE_CURRENT_LIST_DIR}/test_song_controller.cpp)

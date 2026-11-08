@@ -9,7 +9,9 @@ add_library(app_core STATIC
     core/Project.cpp
     core/PluginHost.cpp
     core/OfflineRender.cpp
-    core/RealtimeTrap.cpp)
+    core/RealtimeTrap.cpp
+    core/SongController.cpp
+    core/SongPipeline.cpp)
 target_include_directories(app_core PUBLIC ${PROJECT_SOURCE_DIR})
 target_link_libraries(app_core
     PUBLIC  jaudios_juce engine_analysis engine_theory engine_generators engine_synth engine_fx engine_export
@@ -22,6 +24,17 @@ add_library(app_rt_trap_hooks OBJECT core/RealtimeTrapHooks.cpp)
 target_include_directories(app_rt_trap_hooks PRIVATE ${PROJECT_SOURCE_DIR})
 target_link_libraries(app_rt_trap_hooks PRIVATE ${CMAKE_DL_LIBS})
 
+# The UI (ui-shell) as a library: the app and the headless UI tests link the same components.
+add_library(app_gui STATIC
+    gui/ExternalDrag.cpp
+    gui/Lanes.cpp
+    gui/MainComponent.cpp
+    gui/Panels.cpp
+    gui/SongView.cpp
+    gui/Theme.cpp
+    gui/Timeline.cpp)
+target_link_libraries(app_gui PUBLIC app_core PRIVATE jaudios_warnings)
+
 if(JAUDIOS_BUILD_APP)
     juce_add_gui_app(JAudios
         PRODUCT_NAME "JAudios"
@@ -31,13 +44,8 @@ if(JAUDIOS_BUILD_APP)
         MICROPHONE_PERMISSION_ENABLED TRUE
         MICROPHONE_PERMISSION_TEXT "JAudios records audio you choose to capture for analysis.")
 
-    target_sources(JAudios PRIVATE
-        gui/Main.cpp
-        gui/ExternalDrag.cpp
-        gui/MainComponent.cpp
-        gui/WaveformView.cpp)
-
-    target_link_libraries(JAudios PRIVATE app_core jaudios_warnings)
+    target_sources(JAudios PRIVATE gui/Main.cpp)
+    target_link_libraries(JAudios PRIVATE app_gui jaudios_warnings)
     if(JAUDIOS_WITH_ONNXRUNTIME)
         jaudios_copy_onnxruntime(JAudios)
     endif()

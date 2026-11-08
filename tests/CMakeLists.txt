@@ -122,3 +122,8 @@ if(JAUDIOS_ML_PYTHON)
              COMMAND ${JAUDIOS_ML_PYTHON} ${PROJECT_SOURCE_DIR}/ml/tests/cqt_reference.py ${JAUDIOS_CQT_REFERENCE_DIR} ${_fixture_wavs})
     set_tests_properties(cqt_reference PROPERTIES FIXTURES_SETUP cqt_reference FIXTURES_REQUIRED golden_audio)
 endif()
+
+# ui-shell: the editor's components, headless (snapshots, events, timing).
+add_executable(jaudios_ui_tests TestMain.cpp ui/test_ui_shell.cpp)
+target_link_libraries(jaudios_ui_tests PRIVATE Catch2::Catch2 app_gui test_support jaudios_warnings)
+catch_discover_tests(jaudios_ui_tests DISCOVERY_MODE PRE_TEST PROPERTIES ENVIRONMENT "${JAUDIOS_TEST_ENV}")
