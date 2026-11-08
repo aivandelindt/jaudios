@@ -20,10 +20,15 @@ include(analysis/sources.cmake)
 
 jaudios_engine_lib(engine_theory     SOURCES ${ENGINE_THEORY_SOURCES})
 jaudios_engine_lib(engine_analysis   SOURCES ${ENGINE_ANALYSIS_SOURCES} DEPS engine_theory jaudios_juce)
-# Dev location of the OpenKeyScan sidecar unpacked by `make models` (see models/manifest.json).
-target_compile_definitions(engine_analysis PRIVATE
-    JAUDIOS_DEV_SIDECAR_DIR="${PROJECT_BINARY_DIR}/sidecar/openkeyscan-analyzer"
-    JAUDIOS_DEV_MODELS_DIR="${PROJECT_BINARY_DIR}/models")
+# Dev location of the OpenKeyScan sidecar and the models unpacked by `make models` (see
+# models/manifest.json), searched after the user's and the bundle's. Release builds turn this off so
+# no build path ends up in a shipped binary (tools/package_macos.sh, docs/releasing.md).
+option(JAUDIOS_DEV_PATHS "Also look for models and the sidecar in this build tree" ON)
+if(JAUDIOS_DEV_PATHS)
+    target_compile_definitions(engine_analysis PRIVATE
+        JAUDIOS_DEV_SIDECAR_DIR="${PROJECT_BINARY_DIR}/sidecar/openkeyscan-analyzer"
+        JAUDIOS_DEV_MODELS_DIR="${PROJECT_BINARY_DIR}/models")
+endif()
 
 # Phase B: ONNX Runtime + the model's expected sha256 from models/manifest.json.
 file(READ "${PROJECT_SOURCE_DIR}/models/manifest.json" _manifest)

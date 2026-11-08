@@ -13,6 +13,7 @@ name: macOS (Apple Silicon)
 on:
   push:
     branches: [main]
+    tags: ["v*"]   # a release: the DMG is attached to a GitHub release (job "release")
   pull_request:
   workflow_dispatch:
 
@@ -264,6 +265,48 @@ jobs:
             | python3 -c "import json,sys; d=json.load(sys.stdin); c=d['chords_instrument']; print(c); sys.exit(0 if c['parameters'] == {'Gain': '0.40', 'Octave': '-1', 'Bypass': 'Off'} else 1)"
           cmp "$RUNNER_TEMP/plugin1.wav" "$RUNNER_TEMP/plugin2.wav" && echo "restored render is bit-identical"
 
+      - name: Package (DMG; Developer ID signed + notarised when the signing secrets are set, else ad-hoc)
+        env:
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: tools/package_macos.sh --build-dir build --models build/models --out "$RUNNER_TEMP/dist" | tee "$RUNNER_TEMP/package.json"
+
+      - name: Smoke test the packaged app (copied out of the DMG, bundled models only)
+        run: |
+          MNT="$(mktemp -d)"
+          hdiutil attach "$RUNNER_TEMP"/dist/JAudios-*.dmg -nobrowse -readonly -mountpoint "$MNT"
+          mkdir -p "$RUNNER_TEMP/Applications" "$RUNNER_TEMP/home"
+          ditto "$MNT/JAudios.app" "$RUNNER_TEMP/Applications/JAudios.app"
+          hdiutil detach "$MNT"
+          APP="$RUNNER_TEMP/Applications/JAudios.app"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -d --entitlements - "$APP" 2>/dev/null | grep -c disable-library-validation
+          # a fresh HOME: no ~/Library/Application Support models; outside the build tree: no dev paths
+          HOME="$RUNNER_TEMP/home" "$APP/Contents/MacOS/JAudios" --self-test tests/fixtures/house_124_Amin.wav | tee "$RUNNER_TEMP/selftest.json"
+          python3 - "$RUNNER_TEMP/selftest.json" "$APP" <<'PY'
+          import json, sys
+          r, app = json.load(open(sys.argv[1])), sys.argv[2]
+          inside = lambda p: isinstance(p, str) and p.startswith(app + "/Contents/")
+          problems = [m for m, p in r["models"].items() if p is not None and not inside(p)]
+          problems += [] if inside(r["plugin_scanner"]) else ["plugin scanner outside the bundle"]
+          problems += [] if r["ok"] else ["self-test not ok"]
+          print(f"{r['song'].get('key')} ({r['song'].get('camelot')}), {r['song'].get('bpm', 0):.1f} BPM, {r['song'].get('progression')} in {r['song'].get('seconds', 0):.1f} s; models: {sorted(m for m, p in r['models'].items() if p)}")
+          sys.exit("; ".join(problems) if problems else 0)
+          PY
+
+      - name: Upload the package
+        uses: actions/upload-artifact@v4
+        with:
+          name: jaudios-macos
+          path: |
+            ${{ runner.temp }}/dist/JAudios-*.dmg
+            ${{ runner.temp }}/dist/JAudios-*.dmg.sha256
+          if-no-files-found: error
+
       - name: Stem separation with the CoreML execution provider (diagnostic)
         continue-on-error: true
         run: |
@@ -291,3 +334,23 @@ jobs:
           python3 tools/models.py --only onnx --build-dir "$MAC"
           OUT=$(JAUDIOS_MODELS_DIR="$MAC/models" build/tools/cli/app-cli_artefacts/Release/app-cli analyze tests/fixtures/house_124_Amin.wav)
           echo "$OUT" | python3 -c "import json,sys; k=json.load(sys.stdin)['key']; print('backend', k['backend'], k['camelot'], k.get('warning','')); sys.exit(0 if k['backend']=='onnx' else 1)"
+
+  release:
+    name: GitHub release (tags v*)
+    needs: macos
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: jaudios-macos
+          path: dist
+      - name: Create the release with the DMG and its sha256
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -la dist
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "JAudios ${GITHUB_REF_NAME#v}" \
+            --notes "macOS (Apple Silicon). Verify the download: shasum -a 256 -c JAudios-*.dmg.sha256"

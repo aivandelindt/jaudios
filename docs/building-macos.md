@@ -447,7 +447,7 @@ Then unpack it to `build/sidecar/` and re-configure so it is copied into the app
 python3 tools/models.py --only sidecar
 ```
 
-Signing and notarizing the sidecar is covered by the packaging-and-release skill.
+Packaging, signing and notarising a release: see [releasing.md](releasing.md).
 
 ## Troubleshooting
 

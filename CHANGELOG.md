@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Packaging and release (M12, packaging-and-release)
+- `tools/package_macos.sh`: builds the release DMG and its `.sha256`.
+  - Bundles the plugin scanner (`Contents/MacOS`) and the models within the 200 MB cap (key, Basic Pitch and HT-Demucs, about
+    193 MB, with their provenance records). It drops the Phase A sidecar.
+  - Signs inside-out with the hardened runtime and a timestamp: dylibs, then the scanner, then the app. It verifies with
+    `codesign --verify --deep --strict`. Entitlements: audio input; library validation off, for third-party VST3s.
+  - Notarises and staples when notary credentials are set; otherwise it ad-hoc signs. A CI certificate goes through a temporary
+    keychain.
+  - Fails over budget: bundled models > 200 MB, installed app > 400 MB.
+- `JAudios --self-test [FILE]`: headless JSON report, then quit, with exit code 0 when OK. It reports the models found, the key
+  backend, the plugin scanner, and the key, tempo and progression of the file. This is the packaged app's smoke test.
+- The dev build's model and sidecar paths are used only when the executable runs inside its build tree, so a packaged or copied app
+  can't pass on build-tree models. `-DJAUDIOS_DEV_PATHS=OFF` removes them from release builds.
+- The plugin scanner is found beside the executable, or else in the build tree from any of its binaries.
+- macOS CI:
+  - packages on every run;
+  - copies the app out of the DMG and checks its signature;
+  - runs the self-test with a fresh `HOME`, and asserts that every model and the scanner came from inside the bundle;
+  - uploads the DMG;
+  - on a `v*` tag, creates a GitHub release with the DMG and its sha256.
+- Tests: the self-test in the dev build (models, ONNX key backend, scanner, a song's analysis; a missing file fails).
+- Docs: `docs/releasing.md` (local release builds, signing, notarisation, CI secrets, tagging).
+
 ### Live capture (M11, audio-capture)
 - `analysis::makeCaptureResult()`: the raw-audio → 44.1 kHz float conversion. File import now goes through it, and so do live
   captures, so the same samples always give the same buffer.
