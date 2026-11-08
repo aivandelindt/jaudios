@@ -257,6 +257,38 @@ Options: `--chords PRESET`, `--bass PRESET` (`--list-presets`: piano and keys, p
 and saw bass), `--no-drums`, `--stems`, `--bypass` (the source alone, as the app's bypass switch
 plays it).
 
+## 3h. Your VST3 instruments
+
+The chord and bass channels can play VST3 instruments instead of the built-in patches. Plugins are
+scanned **out of process**: `jaudios-plugin-scanner` (built next to the app and the CLI) opens one
+plugin file at a time, so a plugin that crashes or hangs while being scanned only takes the scanner
+down. It's recorded as failed and the scan carries on (30 s timeout per file). Found plugins go into
+a known-plugin list at `~/Library/Application Support/JAudios/plugins.xml`
+(`JAUDIOS_PLUGIN_LIST` or `--plugin-list FILE` overrides it).
+
+```bash
+CLI=build/tools/cli/app-cli_artefacts/Release/app-cli
+"$CLI" plugins scan                 # /Library/Audio/Plug-Ins/VST3 and ~/Library/Audio/Plug-Ins/VST3
+"$CLI" plugins scan --path ~/MyPlugins/VST3
+"$CLI" plugins list
+```
+
+Audition with a scanned plugin (by name), set its parameters (normalised 0..1, by name or ID), and
+keep the setup in a project file:
+
+```bash
+"$CLI" audition tests/fixtures/house_124_Amin.wav --chords-plugin "Vital" --chords-param "Level=0.5" --save-project /tmp/song.json
+"$CLI" audition tests/fixtures/house_124_Amin.wav --project /tmp/song.json    # same instruments, plugin state included
+```
+
+The project file holds each channel's instrument: a built-in preset, an SFZ file, the drum kit,
+or a plugin, with its description and its own state blob (`getStateInformation`, base64). Flags
+given on the command line override the project's slot for that channel.
+
+The build also makes a small test instrument, `JAudios Test Synth`, under
+`build/tests/plugins/TestSynth/` for the tests and CI. It's never installed or shipped. To try
+hosting without third-party plugins: `"$CLI" plugins scan --path build/tests/plugins/TestSynth/JAudiosTestSynth_artefacts/Release/VST3`.
+
 ## 4. Run
 
 The app:

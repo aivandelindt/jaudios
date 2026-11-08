@@ -69,6 +69,22 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME bass_patterns_schema COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/validate_patterns.py)
 endif()
 
+# synth-and-vst3-host: a VST3 test instrument built here, and the hosting tests against it
+add_subdirectory(plugins/TestSynth)
+add_executable(jaudios_plugin_tests TestMain.cpp golden/test_plugin_host.cpp)
+target_link_libraries(jaudios_plugin_tests PRIVATE Catch2::Catch2 app_core test_support jaudios_warnings)
+target_compile_definitions(jaudios_plugin_tests PRIVATE JAUDIOS_TEST_VST3="${JAUDIOS_TEST_VST3}"
+    JAUDIOS_PLUGIN_SCANNER="$<TARGET_FILE:jaudios-plugin-scanner>")
+add_dependencies(jaudios_plugin_tests JAudiosTestSynth_VST3 jaudios-plugin-scanner)
+catch_discover_tests(jaudios_plugin_tests DISCOVERY_MODE PRE_TEST PROPERTIES ENVIRONMENT "${JAUDIOS_TEST_ENV}")
+if(JAUDIOS_RT_CHECK) # the hosting wrapper's [rt] test, with the realtime trap (tools/rt_check.sh)
+    add_executable(jaudios_plugin_rt_tests TestMain.cpp golden/test_plugin_host.cpp $<TARGET_OBJECTS:app_rt_trap_hooks>)
+    target_link_libraries(jaudios_plugin_rt_tests PRIVATE Catch2::Catch2 app_core test_support ${CMAKE_DL_LIBS})
+    target_compile_definitions(jaudios_plugin_rt_tests PRIVATE JAUDIOS_TEST_VST3="${JAUDIOS_TEST_VST3}"
+        JAUDIOS_PLUGIN_SCANNER="$<TARGET_FILE:jaudios-plugin-scanner>")
+    add_dependencies(jaudios_plugin_rt_tests JAudiosTestSynth_VST3 jaudios-plugin-scanner)
+endif()
+
 # Chord engine on the fixtures vs their truth chords (needs build/models/basic_pitch.onnx).
 add_executable(jaudios_chords_tests TestMain.cpp golden/test_chords_golden.cpp)
 target_link_libraries(jaudios_chords_tests PRIVATE Catch2::Catch2 app_core test_support jaudios_warnings)

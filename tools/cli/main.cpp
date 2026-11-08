@@ -27,14 +27,23 @@
 //                                               built-in (or a user) kit: drums.wav + drums.mid, or one
 //                                               WAV + MIDI per element (--split)
 //   app-cli audition <audio-file> [--style ...] [--chords PRESET] [--bass PRESET] [--no-drums] [--stems]
+//                    [--chords-plugin NAME] [--bass-plugin NAME] [--chords-param P=V] [--bass-param P=V]
+//                    [--project FILE] [--save-project FILE] [--plugin-list FILE]
 //                    [--bypass] [--out FILE.wav] | app-cli audition --list-presets
 //                                               chords + bass + drums generated for the file, played by the
-//                                               built-in instruments through the engine graph with the
-//                                               source (offline render of what the app plays)
+//                                               built-in instruments or scanned VST3s through the engine
+//                                               graph with the source (offline render of what the app
+//                                               plays); --project restores / --save-project keeps the
+//                                               channels' instruments, plugin state included
+//   app-cli plugins scan [--path DIR]... [--plugin-list FILE] [--timeout SEC]
+//                                               scans VST3s out of process (default: the standard VST3
+//                                               folders) into the known-plugin list
+//   app-cli plugins list [--plugin-list FILE]   the known-plugin list
 
 #include "app/core/AnalysisService.h"
 #include "app/core/AudioEngine.h"
 #include "app/core/HarmonySource.h"
+#include "app/core/InstrumentSlot.h"
 #include "app/core/OfflineRender.h"
 #include "app/core/RealtimeTrap.h"
 #include "engine/analysis/Analysis.h"
@@ -98,8 +107,11 @@ int usage()
                  "                   [--kit DIR] [--split] [--out DIR]\n"
                  "  app-cli drums --list-patterns\n"
                  "  app-cli audition <audio-file> [--style ...] [--chords PRESET] [--bass PRESET] [--no-drums] [--stems]\n"
-                 "                   [--bypass] [--out FILE.wav]\n"
-                 "  app-cli audition --list-presets\n";
+                 "                   [--chords-plugin NAME] [--bass-plugin NAME] [--chords-param P=V] [--bass-param P=V]\n"
+                 "                   [--project FILE] [--save-project FILE] [--plugin-list FILE] [--bypass] [--out FILE.wav]\n"
+                 "  app-cli audition --list-presets\n"
+                 "  app-cli plugins scan [--path DIR]... [--plugin-list FILE] [--timeout SEC]\n"
+                 "  app-cli plugins list [--plugin-list FILE]\n";
     return 2;
 }
 
@@ -996,13 +1008,139 @@ int cmdListPresets()
     return 0;
 }
 
+var describePlugin (const juce::PluginDescription& d)
+{
+    return makeObject ({ { "name", d.name }, { "vendor", d.manufacturerName }, { "format", d.pluginFormatName },
+                         { "version", d.version }, { "instrument", d.isInstrument }, { "file", d.fileOrIdentifier } });
+}
+
+int cmdPlugins (int argc, char** argv)
+{
+    if (argc < 3)
+        return usage();
+    const juce::String sub (argv[2]);
+    juce::File listFile = jaudios::PluginHost::defaultListFile();
+    juce::FileSearchPath paths;
+    int timeoutSec = 30;
+    for (int i = 3; i < argc; ++i)
+    {
+        const juce::String a (argv[i]);
+        if (a == "--plugin-list" && i + 1 < argc) listFile = argFile (argv[++i]);
+        else if (a == "--path" && i + 1 < argc && sub == "scan") paths.add (argFile (argv[++i]));
+        else if (a == "--timeout" && i + 1 < argc && sub == "scan") timeoutSec = std::max (1, juce::String (argv[++i]).getIntValue());
+        else return usage();
+    }
+    jaudios::PluginHost host;
+    host.loadList (listFile); // keep what earlier scans found
+    if (sub == "list")
+    {
+        juce::Array<var> plugins;
+        for (const auto& d : host.known().getTypes())
+            plugins.add (describePlugin (d));
+        printJson (makeObject ({ { "list", listFile.getFullPathName() }, { "plugins", plugins } }));
+        return 0;
+    }
+    if (sub != "scan")
+        return usage();
+    if (paths.getNumPaths() == 0)
+        paths = host.defaultSearchPath();
+    const auto t0 = juce::Time::getMillisecondCounterHiRes();
+    const auto r = host.scan (paths, timeoutSec * 1000, [] (const juce::String& f) { std::cerr << "scanning " << f << "\n"; });
+    if (! host.saveList (listFile))
+    {
+        std::cerr << "error: could not write " << listFile.getFullPathName() << "\n";
+        return 1;
+    }
+    juce::Array<var> found, failed;
+    for (const auto& d : r.found)
+        found.add (describePlugin (d));
+    for (const auto& f : r.failed)
+        failed.add (f);
+    printJson (makeObject ({ { "paths", paths.toString() }, { "found", found }, { "failed", failed },
+                             { "known", host.known().getNumTypes() }, { "list", listFile.getFullPathName() },
+                             { "scan_ms", juce::Time::getMillisecondCounterHiRes() - t0 } }));
+    return 0;
+}
+
 struct AuditionOptions
 {
     jaudios::generators::EngineSettings engine;
     std::string chordsPreset, bassPreset;
+    juce::String chordsPlugin, bassPlugin;
+    juce::StringArray chordsParams, bassParams; // "name=0..1"
+    juce::File project, saveProject;
+    juce::File pluginList = jaudios::PluginHost::defaultListFile();
     bool drums = true, stems = false, bypass = false;
     juce::File out;
 };
+
+/** The instrument for a channel: the project's slot, else a scanned plugin, else a built-in preset. */
+std::shared_ptr<jaudios::synth::Instrument> makeChannelInstrument (const char* channel, const std::optional<jaudios::ProjectInstruments>& project,
+                                                                  const juce::String& pluginName, const std::string& preset, bool presetGiven,
+                                                                  const juce::StringArray& params, jaudios::PluginHost& host, double sr, int block)
+{
+    juce::String error;
+    std::shared_ptr<jaudios::synth::Instrument> inst;
+    if (project && project->slots.count (channel) != 0 && pluginName.isEmpty() && ! presetGiven) // flags override the project
+        inst = jaudios::instantiate (project->slots.at (channel), host, sr, block, error);
+    else if (pluginName.isNotEmpty())
+    {
+        const auto d = host.find (pluginName);
+        if (! d)
+        {
+            std::cerr << "error: no scanned plugin called \"" << pluginName << "\" (app-cli plugins scan / list)\n";
+            return nullptr;
+        }
+        inst = host.createInstrument (*d, sr, block, error);
+    }
+    else if (const auto* p = jaudios::synth::findSfzPreset (preset))
+    {
+        auto sfz = std::make_shared<jaudios::synth::SfzInstrument>();
+        if (sfz->load (*p))
+            inst = sfz;
+        else
+            error = "could not load preset " + juce::String (preset);
+    }
+    else
+        error = "unknown preset " + juce::String (preset) + " (app-cli audition --list-presets)";
+    if (inst == nullptr)
+    {
+        std::cerr << "error: " << channel << ": " << error << "\n";
+        return nullptr;
+    }
+    if (! params.isEmpty())
+    {
+        auto* plugin = dynamic_cast<jaudios::PluginInstrument*> (inst.get());
+        if (plugin == nullptr)
+        {
+            std::cerr << "error: " << channel << ": parameters need a plugin instrument\n";
+            return nullptr;
+        }
+        for (const auto& kv : params)
+            if (! kv.containsChar ('=') || ! plugin->setParameter (kv.upToFirstOccurrenceOf ("=", false, false).trim(),
+                                                                  kv.fromFirstOccurrenceOf ("=", false, false).getFloatValue()))
+            {
+                std::cerr << "error: " << channel << ": no parameter for \"" << kv << "\" (NAME=0..1)\n";
+                return nullptr;
+            }
+    }
+    return inst;
+}
+
+var describeInstrument (jaudios::synth::Instrument& inst)
+{
+    auto o = makeObject ({ { "name", inst.name() } });
+    if (auto* plugin = dynamic_cast<jaudios::PluginInstrument*> (&inst))
+    {
+        o.getDynamicObject()->setProperty ("plugin", plugin->description().fileOrIdentifier);
+        auto params = makeObject ({});
+        const auto values = plugin->parameterValues();
+        for (const auto& k : values.getAllKeys())
+            params.getDynamicObject()->setProperty (k, values[k]);
+        o.getDynamicObject()->setProperty ("parameters", params);
+    }
+    return o;
+}
 
 int cmdAudition (const juce::File& file, AuditionOptions opt)
 {
@@ -1015,19 +1153,31 @@ int cmdAudition (const juce::File& file, AuditionOptions opt)
         return 1;
 
     const auto style = opt.engine.style;
+    const bool chordsPresetGiven = ! opt.chordsPreset.empty(), bassPresetGiven = ! opt.bassPreset.empty();
     if (opt.chordsPreset.empty())
         opt.chordsPreset = style == gen::Style::pop || style == gen::Style::cinematic ? "piano"
                          : style == gen::Style::lofi || style == gen::Style::rnb ? "keys"
                          : style == gen::Style::trance ? "pluck" : "pad";
     if (opt.bassPreset.empty())
         opt.bassPreset = style == gen::Style::techno || style == gen::Style::trance ? "saw_bass" : "sub_bass";
-    const auto* chordsPreset = sy::findSfzPreset (opt.chordsPreset);
-    const auto* bassPreset = sy::findSfzPreset (opt.bassPreset);
-    if (chordsPreset == nullptr || bassPreset == nullptr)
+    std::optional<jaudios::ProjectInstruments> project;
+    if (opt.project != juce::File())
     {
-        std::cerr << "error: unknown preset (app-cli audition --list-presets)\n";
-        return 2;
+        juce::String error;
+        project = jaudios::ProjectInstruments::load (opt.project, error);
+        if (! project)
+        {
+            std::cerr << "error: " << opt.project.getFullPathName() << ": " << error << "\n";
+            return 1;
+        }
     }
+    jaudios::PluginHost host;
+    host.loadList (opt.pluginList);
+    const double sr = capture->sampleRate;
+    auto chords = makeChannelInstrument ("chords", project, opt.chordsPlugin, opt.chordsPreset, chordsPresetGiven, opt.chordsParams, host, sr, 512);
+    auto bass = makeChannelInstrument ("bass", project, opt.bassPlugin, opt.bassPreset, bassPresetGiven, opt.bassParams, host, sr, 512);
+    if (chords == nullptr || bass == nullptr)
+        return 2;
 
     // generate: chords (top progression), bass on it, drums on the bars
     auto harmony = runHarmony (*capture, opt.engine, opt.stems, true);
@@ -1068,7 +1218,6 @@ int cmdAudition (const juce::File& file, AuditionOptions opt)
     bassSeq.sort();
 
     // the engine graph, exactly as the app plays it (offline: fixed 512-sample device blocks)
-    const double sr = capture->sampleRate;
     jaudios::AudioEngine engine;
     // mixer state first: prepare snaps every strip's gain smoother to it, so the render starts in
     // that state instead of ramping into it (live toggles ramp over 20 ms, click-free)
@@ -1079,20 +1228,21 @@ int cmdAudition (const juce::File& file, AuditionOptions opt)
     engine.setBypass (opt.bypass);
     engine.prepareOffline (sr, 512);
     engine.setSource (std::make_shared<const juce::AudioBuffer<float>> (capture->buffer));
-    auto chords = std::make_shared<sy::SfzInstrument>();
-    auto bass = std::make_shared<sy::SfzInstrument>();
-    if (! chords->load (*chordsPreset) || ! bass->load (*bassPreset))
-    {
-        std::cerr << "error: could not load the built-in presets\n";
-        return 1;
-    }
     engine.setChannelInstrument (jaudios::ChannelId::chords, chords);
     engine.setChannelInstrument (jaudios::ChannelId::bass, bass);
     engine.setChannelClip (jaudios::ChannelId::chords, std::make_shared<const jaudios::MidiClip> (jaudios::makeClip (chordSeq, sr)));
     engine.setChannelClip (jaudios::ChannelId::bass, std::make_shared<const jaudios::MidiClip> (jaudios::makeClip (bassSeq, sr)));
+    std::shared_ptr<jaudios::synth::Instrument> drums;
     if (opt.drums)
     {
-        engine.setChannelInstrument (jaudios::ChannelId::drums, std::make_shared<sy::DrumInstrument>());
+        drums = project && project->slots.count ("drums") != 0 ? [&] { juce::String e; return jaudios::instantiate (project->slots.at ("drums"), host, sr, 512, e); }()
+                                                                : std::make_shared<sy::DrumInstrument>();
+        if (drums == nullptr)
+        {
+            std::cerr << "error: drums: could not restore the project's drum instrument\n";
+            return 1;
+        }
+        engine.setChannelInstrument (jaudios::ChannelId::drums, drums);
         engine.setChannelClip (jaudios::ChannelId::drums, std::make_shared<const jaudios::MidiClip> (jaudios::makeClip (sy::drumsToMidi (drumNotes), sr)));
     }
     engine.play();
@@ -1110,6 +1260,20 @@ int cmdAudition (const juce::File& file, AuditionOptions opt)
     const double renderMs = juce::Time::getMillisecondCounterHiRes() - t0;
     engine.stop();
 
+    if (opt.saveProject != juce::File())
+    {
+        jaudios::ProjectInstruments p;
+        p.slots["chords"] = *jaudios::captureSlot (*chords);
+        p.slots["bass"] = *jaudios::captureSlot (*bass);
+        if (drums != nullptr)
+            p.slots["drums"] = *jaudios::captureSlot (*drums);
+        if (! p.save (opt.saveProject))
+        {
+            std::cerr << "error: could not write " << opt.saveProject.getFullPathName() << "\n";
+            return 1;
+        }
+    }
+
     if (opt.out == juce::File())
         opt.out = file.getSiblingFile (file.getFileNameWithoutExtension() + ".audition.wav");
     opt.out.getParentDirectory().createDirectory();
@@ -1121,8 +1285,9 @@ int cmdAudition (const juce::File& file, AuditionOptions opt)
         { "file", file.getFullPathName() },
         { "key", juce::String (jaudios::theory::traditionalName (key)) },
         { "progression", juce::String (top.summary (key)) },
-        { "chords_preset", juce::String (chordsPreset->id) },
-        { "bass_preset", juce::String (bassPreset->id) },
+        { "chords_instrument", describeInstrument (*chords) },
+        { "bass_instrument", describeInstrument (*bass) },
+        { "project", opt.saveProject != juce::File() ? var (opt.saveProject.getFullPathName()) : var() },
         { "drums", opt.drums ? var (juce::String (gen::drumPatternsFor (style).front()->name)) : var ("off") },
         { "bypass", opt.bypass },
         { "notes", makeObject ({ { "chords", chordSeq.getNumEvents() / 2 }, { "bass", (int) bassNotes.size() }, { "drums", (int) drumNotes.size() } }) },
@@ -1156,6 +1321,8 @@ int main (int argc, char** argv)
         return cmdListDrumPatterns();
     if (cmd == "audition" && argc >= 3 && juce::String (argv[2]) == "--list-presets")
         return cmdListPresets();
+    if (cmd == "plugins")
+        return cmdPlugins (argc, argv);
 
     if (argc < 3)
         return usage();
@@ -1370,6 +1537,13 @@ int main (int argc, char** argv)
             }
             else if (a == "--chords" && hasValue) opt.chordsPreset = argv[++i];
             else if (a == "--bass" && hasValue) opt.bassPreset = argv[++i];
+            else if (a == "--chords-plugin" && hasValue) opt.chordsPlugin = argv[++i];
+            else if (a == "--bass-plugin" && hasValue) opt.bassPlugin = argv[++i];
+            else if (a == "--chords-param" && hasValue) opt.chordsParams.add (argv[++i]);
+            else if (a == "--bass-param" && hasValue) opt.bassParams.add (argv[++i]);
+            else if (a == "--project" && hasValue) opt.project = argFile (argv[++i]);
+            else if (a == "--save-project" && hasValue) opt.saveProject = argFile (argv[++i]);
+            else if (a == "--plugin-list" && hasValue) opt.pluginList = argFile (argv[++i]);
             else if (a == "--out" && hasValue) opt.out = argFile (argv[++i]);
             else return usage();
         }
