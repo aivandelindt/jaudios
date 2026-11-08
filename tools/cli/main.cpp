@@ -29,12 +29,15 @@
 //   app-cli audition <audio-file> [--style ...] [--chords PRESET] [--bass PRESET] [--no-drums] [--stems]
 //                    [--chords-plugin NAME] [--bass-plugin NAME] [--chords-param P=V] [--bass-param P=V]
 //                    [--project FILE] [--save-project FILE] [--plugin-list FILE]
-//                    [--bypass] [--out FILE.wav] | app-cli audition --list-presets
+//                    [--fx CHANNEL.PARAM=VALUE]... [--bypass] [--out FILE.wav]
+//                    | app-cli audition --list-presets | app-cli audition --list-fx
 //                                               chords + bass + drums generated for the file, played by the
 //                                               built-in instruments or scanned VST3s through the engine
 //                                               graph with the source (offline render of what the app
 //                                               plays); --project restores / --save-project keeps the
-//                                               channels' instruments, plugin state included
+//                                               channels' instruments, plugin state included; --fx sets a
+//                                               channel's insert FX (e.g. bass.duck_on=on), tempo-synced
+//                                               to the detected BPM
 //   app-cli plugins scan [--path DIR]... [--plugin-list FILE] [--timeout SEC]
 //                                               scans VST3s out of process (default: the standard VST3
 //                                               folders) into the known-plugin list
@@ -108,8 +111,9 @@ int usage()
                  "  app-cli drums --list-patterns\n"
                  "  app-cli audition <audio-file> [--style ...] [--chords PRESET] [--bass PRESET] [--no-drums] [--stems]\n"
                  "                   [--chords-plugin NAME] [--bass-plugin NAME] [--chords-param P=V] [--bass-param P=V]\n"
-                 "                   [--project FILE] [--save-project FILE] [--plugin-list FILE] [--bypass] [--out FILE.wav]\n"
-                 "  app-cli audition --list-presets\n"
+                 "                   [--project FILE] [--save-project FILE] [--plugin-list FILE]\n"
+                 "                   [--fx CHANNEL.PARAM=VALUE]... [--bypass] [--out FILE.wav]\n"
+                 "  app-cli audition --list-presets | --list-fx\n"
                  "  app-cli plugins scan [--path DIR]... [--plugin-list FILE] [--timeout SEC]\n"
                  "  app-cli plugins list [--plugin-list FILE]\n";
     return 2;
@@ -1062,6 +1066,46 @@ int cmdPlugins (int argc, char** argv)
     return 0;
 }
 
+const std::array<std::pair<const char*, jaudios::ChannelId>, jaudios::numChannelIds> channelNames { {
+    { "source", jaudios::ChannelId::source }, { "chords", jaudios::ChannelId::chords }, { "bass", jaudios::ChannelId::bass },
+    { "drums", jaudios::ChannelId::drums }, { "drums_stem", jaudios::ChannelId::stemDrums }, { "bass_stem", jaudios::ChannelId::stemBass },
+    { "other_stem", jaudios::ChannelId::stemOther }, { "vocals_stem", jaudios::ChannelId::stemVocals } } };
+
+int cmdListFx()
+{
+    namespace fx = jaudios::fx;
+    juce::Array<var> params;
+    for (const auto& s : fx::paramSpecs())
+    {
+        auto o = makeObject ({ { "id", juce::String (s.id) }, { "name", juce::String (s.name) },
+                               { "kind", s.kind == fx::ParamSpec::Kind::toggle ? "toggle" : s.kind == fx::ParamSpec::Kind::choice ? "choice" : "range" } });
+        auto* d = o.getDynamicObject();
+        if (s.kind == fx::ParamSpec::Kind::choice)
+        {
+            juce::Array<var> choices;
+            for (auto* c : s.choices)
+                choices.add (juce::String (c));
+            d->setProperty ("choices", choices);
+            d->setProperty ("default", juce::String (s.choices[(size_t) s.defaultValue]));
+        }
+        else if (s.kind == fx::ParamSpec::Kind::range)
+        {
+            d->setProperty ("min", s.min);
+            d->setProperty ("max", s.max);
+            d->setProperty ("default", s.defaultValue);
+            d->setProperty ("unit", juce::String (s.unit));
+        }
+        else
+            d->setProperty ("default", s.defaultValue >= 0.5f ? "on" : "off");
+        params.add (o);
+    }
+    juce::Array<var> channels;
+    for (const auto& c : channelNames)
+        channels.add (juce::String (c.first));
+    printJson (makeObject ({ { "channels", channels }, { "order", "filter -> saturation -> ott -> duck -> delay -> reverb" }, { "parameters", params } }));
+    return 0;
+}
+
 struct AuditionOptions
 {
     jaudios::generators::EngineSettings engine;
@@ -1070,6 +1114,7 @@ struct AuditionOptions
     juce::StringArray chordsParams, bassParams; // "name=0..1"
     juce::File project, saveProject;
     juce::File pluginList = jaudios::PluginHost::defaultListFile();
+    juce::StringArray fx; // "channel.param=value"
     bool drums = true, stems = false, bypass = false;
     juce::File out;
 };
@@ -1226,6 +1271,23 @@ int cmdAudition (const juce::File& file, AuditionOptions opt)
     engine.setChannelGainDecibels (jaudios::ChannelId::bass, -9.0f);
     engine.setChannelGainDecibels (jaudios::ChannelId::drums, -10.0f);
     engine.setBypass (opt.bypass);
+    juce::Array<var> fxApplied;
+    for (const auto& setting : opt.fx)
+    {
+        const auto target = setting.upToFirstOccurrenceOf ("=", false, false).trim();
+        const auto value = setting.fromFirstOccurrenceOf ("=", false, false).trim();
+        const auto channel = target.upToFirstOccurrenceOf (".", false, false);
+        const auto param = target.fromFirstOccurrenceOf (".", false, false);
+        const auto it = std::find_if (channelNames.begin(), channelNames.end(), [&] (const auto& c) { return channel == c.first; });
+        if (it == channelNames.end() || ! setting.containsChar ('=') || ! engine.setFxParameter (it->second, param, value))
+        {
+            std::cerr << "error: --fx " << setting << ": expected CHANNEL.PARAM=VALUE (app-cli audition --list-fx)\n";
+            return 2;
+        }
+        fxApplied.add (setting);
+    }
+    const double bpm = harmony->analysis.rhythm.bpm > 0.0 ? harmony->analysis.rhythm.bpm : 120.0;
+    engine.setTempo (bpm); // the tempo-synced delay
     engine.prepareOffline (sr, 512);
     engine.setSource (std::make_shared<const juce::AudioBuffer<float>> (capture->buffer));
     engine.setChannelInstrument (jaudios::ChannelId::chords, chords);
@@ -1290,6 +1352,8 @@ int cmdAudition (const juce::File& file, AuditionOptions opt)
         { "project", opt.saveProject != juce::File() ? var (opt.saveProject.getFullPathName()) : var() },
         { "drums", opt.drums ? var (juce::String (gen::drumPatternsFor (style).front()->name)) : var ("off") },
         { "bypass", opt.bypass },
+        { "bpm", bpm },
+        { "fx", fxApplied },
         { "notes", makeObject ({ { "chords", chordSeq.getNumEvents() / 2 }, { "bass", (int) bassNotes.size() }, { "drums", (int) drumNotes.size() } }) },
         { "duration_sec", n / sr },
         { "render_ms", renderMs },
@@ -1321,6 +1385,8 @@ int main (int argc, char** argv)
         return cmdListDrumPatterns();
     if (cmd == "audition" && argc >= 3 && juce::String (argv[2]) == "--list-presets")
         return cmdListPresets();
+    if (cmd == "audition" && argc >= 3 && juce::String (argv[2]) == "--list-fx")
+        return cmdListFx();
     if (cmd == "plugins")
         return cmdPlugins (argc, argv);
 
@@ -1544,6 +1610,7 @@ int main (int argc, char** argv)
             else if (a == "--project" && hasValue) opt.project = argFile (argv[++i]);
             else if (a == "--save-project" && hasValue) opt.saveProject = argFile (argv[++i]);
             else if (a == "--plugin-list" && hasValue) opt.pluginList = argFile (argv[++i]);
+            else if (a == "--fx" && hasValue) opt.fx.add (argv[++i]);
             else if (a == "--out" && hasValue) opt.out = argFile (argv[++i]);
             else return usage();
         }

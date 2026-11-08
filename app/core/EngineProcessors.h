@@ -2,6 +2,7 @@
 
 #include "SpscQueue.h"
 
+#include "engine/fx/FxChain.h"
 #include "engine/synth/Instrument.h"
 
 #include <juce_audio_processors_headless/juce_audio_processors_headless.h>
@@ -152,6 +153,9 @@ public:
         (same block arithmetic, so both stop on the same sample). -1 = no limit (no source). */
     bool setLength (juce::int64 length);
     void collectGarbage();
+    /** Output channel 2 carries a trigger (1.0 on the sample) for every note-on of
+        `note` in the clip (the drums player: GM kick 36, the ducker's "kick events" key); -1 = none. */
+    void setTriggerNote (int note) noexcept { triggerNote.store (note, std::memory_order_relaxed); }
     /** Instruments kept alive here (prepareToPlay re-prepares them for a new device setup). */
     const std::vector<std::shared_ptr<synth::Instrument>>& instruments() const noexcept { return ownedInstruments; }
 
@@ -186,10 +190,14 @@ private:
     size_t cursor = 0;
     bool playing = false;
     juce::MidiBuffer blockMidi;                // reserved in prepareToPlay
+    std::atomic<int> triggerNote { -1 };
 };
 
 //==============================================================================
-/** Per-channel gain / mute (solo is resolved by AudioEngine into an effective mute). */
+/** Per-channel insert FX (fx-chain) then gain / mute (solo is resolved by AudioEngine into an
+    effective mute). Inputs: 0-1 the channel, 2-4 the ducker's key (2: kick triggers from the drums
+    clip player, 3-4: the drums stem). The FX parameters live in this strip's
+    AudioProcessorValueTreeState (message thread writes, audio thread reads, every one smoothed). */
 class ChannelStripProcessor final : public EngineProcessorBase
 {
 public:
@@ -199,12 +207,19 @@ public:
 
     void setGainDecibels (float dB) noexcept;
     void setEffectiveMute (bool shouldMute) noexcept { muted.store (shouldMute, std::memory_order_relaxed); }
+    juce::AudioProcessorValueTreeState& fxState() noexcept { return fx; }
+    void setTempo (double bpm) noexcept { fxChain.setTempo (bpm); }
 
     void prepareToPlay (double sampleRate, int maxBlockSize) override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    /** The FX settings (APVTS state as XML). */
+    void getStateInformation (juce::MemoryBlock&) override;
+    void setStateInformation (const void*, int) override;
 
 private:
     juce::String name;
+    juce::AudioProcessorValueTreeState fx;
+    fx::FxChain fxChain;
     std::atomic<float> gainLinear { 1.0f };
     std::atomic<bool> muted { false };
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> smoother;

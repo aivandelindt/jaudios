@@ -10,7 +10,7 @@ add_library(app_core STATIC
     core/RealtimeTrap.cpp)
 target_include_directories(app_core PUBLIC ${PROJECT_SOURCE_DIR})
 target_link_libraries(app_core
-    PUBLIC  jaudios_juce engine_analysis engine_theory engine_generators engine_synth
+    PUBLIC  jaudios_juce engine_analysis engine_theory engine_generators engine_synth engine_fx
     PRIVATE jaudios_warnings)
 target_compile_definitions(app_core PUBLIC JAUDIOS_VERSION_STRING="${PROJECT_VERSION}")
 

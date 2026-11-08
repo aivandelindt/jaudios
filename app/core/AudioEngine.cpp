@@ -55,9 +55,39 @@ AudioEngine::AudioEngine()
         strips[(size_t) id] = static_cast<ChannelStripProcessor*> (strip->getProcessor());
         connectStereo (graph, player->nodeID, strip->nodeID);
         connectStereo (graph, strip->nodeID, masterNode->nodeID);
+        playerNodes[(size_t) g] = player->nodeID;
     }
+    clipPlayers[2]->setTriggerNote (36); // GM kick: the drums player keys the duckers
+
+    // the ducker's key into every channel strip: kick triggers (input 2), the drums stem (3-4)
+    for (auto* node : graph.getNodes())
+        if (auto* strip = dynamic_cast<ChannelStripProcessor*> (node->getProcessor()); strip != nullptr && strip != master)
+        {
+            graph.addConnection ({ { playerNodes[2], 2 }, { node->nodeID, 2 } }, syncUpdate);
+            for (int ch = 0; ch < 2; ++ch)
+                graph.addConnection ({ { sourceNode->nodeID, 2 + ch }, { node->nodeID, 3 + ch } }, syncUpdate);
+        }
 
     connectStereo (graph, masterNode->nodeID, outNode->nodeID);
+}
+
+juce::AudioProcessorValueTreeState* AudioEngine::fxState (ChannelId id) noexcept
+{
+    auto* strip = strips[(size_t) id];
+    return strip != nullptr ? &strip->fxState() : nullptr;
+}
+
+bool AudioEngine::setFxParameter (ChannelId id, juce::StringRef paramId, const juce::String& value)
+{
+    auto* state = fxState (id);
+    return state != nullptr && fx::setParameter (*state, paramId, value);
+}
+
+void AudioEngine::setTempo (double bpm) noexcept
+{
+    for (auto* strip : strips)
+        if (strip != nullptr)
+            strip->setTempo (bpm);
 }
 
 ClipPlayerProcessor* AudioEngine::clipPlayer (ChannelId id) const noexcept

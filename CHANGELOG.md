@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### Insert FX (M8, fx-chain)
+- `engine/fx` (`engine_fx`, JUCE DSP; no new dependency). `FxChain` runs six stages, in this order:
+  - **Filter:** a TPT state-variable filter computing low-, band- and high-pass together, so changing the type crossfades.
+  - **Saturation:** tanh soft clip at unity small-signal gain.
+  - **OTT-style compressor:** 3 bands split at 88.3 Hz and 2.5 kHz (Linkwitz-Riley), upward and downward per band, stereo-linked, with
+    depth, time and in / out gain.
+  - **Sidechain duck:** keyed by kick events or the drums stem.
+  - **Ping-pong delay:** tempo-synced divisions from 1/16 to 1/2.
+  - **Reverb:** JUCE's.
+- Parameters come from an `AudioProcessorValueTreeState` layout (`fx::createParameterLayout()`; 25 parameters) and every continuous one
+  is smoothed per sample. Switching a stage crossfades over 10 ms, and a stage that is off costs nothing. A delay-time change
+  crossfades between the old and the new tap, so there's no pitch glide. Turning OTT on lets its crossovers settle for 20 ms before
+  the crossfade.
+- Engine: each channel strip owns a parameter tree (state saved as XML) and a chain. The drums clip player outputs a kick-trigger
+  channel (GM note 36), which is routed with the drums stem into every strip as the ducker's key. `AudioEngine::fxState()`,
+  `setFxParameter()` and `setTempo()` are the API.
+- Tests:
+  - every stage's behaviour;
+  - everything off is bit-transparent;
+  - the zipper acceptance: each of the 25 parameters is swept the worst way (alternating extremes, then a new value every block), and
+    the energy above 6 kHz is compared with five static settings. The worst sweep is -70 dB re the tone; a negative control shows an
+    unsmoothed step at -31 dB;
+  - in the engine: the drums clip ducks another channel (even with the drums muted), the drums stem ducks a stem, the delay follows
+    the engine tempo, the state round-trips;
+  - `[rt]`: the chain, and the graph with every stage on every channel while being automated. Zero allocations.
+- `app-cli audition --fx CHANNEL.PARAM=VALUE` (repeatable) and `--list-fx`. Audition passes the detected BPM to the engine.
+- Found by the zipper test and fixed:
+  - Delay / reverb switched on: the send now fades in with the switch, and the reverb tail fades out with it.
+  - OTT: the input gain is applied after the band split. A gain ramp's corners in the near-silent high band were lifted +24 dB by the
+    upward compression.
+  - The kick trigger is 1.0 per kick, so depth means depth (velocity had scaled it).
+
 ### VST3 hosting (M7b, synth-and-vst3-host)
 - JUCE's VST3 host on (`JUCE_PLUGINHOST_VST3`; the VST3 SDK 3.8.0 inside JUCE is MIT). No new dependency.
 - Out-of-process scanning: `jaudios-plugin-scanner <plugin> <out.xml>` scans one file. `PluginHost::scan()` runs it per file with a

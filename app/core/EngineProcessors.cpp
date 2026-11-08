@@ -129,7 +129,11 @@ MidiClip makeClip (const juce::MidiMessageSequence& seq, double transportRate)
     return clip;
 }
 
-ClipPlayerProcessor::ClipPlayerProcessor (juce::String n) : EngineProcessorBase (stereoOutOnly()), name (std::move (n))
+ClipPlayerProcessor::ClipPlayerProcessor (juce::String n)
+    : EngineProcessorBase (BusesProperties()
+                               .withOutput ("Out", juce::AudioChannelSet::stereo(), true)
+                               .withOutput ("Trigger", juce::AudioChannelSet::mono(), true)),
+      name (std::move (n))
 {
     ownedClips.reserve (8);
     ownedInstruments.reserve (8);
@@ -254,10 +258,23 @@ void ClipPlayerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
             blockMidi.addEvent (e.message, (int) std::max<juce::int64> (0, e.position - readPosition)); // fits the reserved space
         }
     }
+    juce::AudioBuffer<float> audio (buffer.getArrayOfWritePointers(), 2, buffer.getNumSamples()); // a view: no allocation
     if (instrument != nullptr)
-        instrument->process (buffer, blockMidi); // also renders release tails while stopped
+        instrument->process (audio, blockMidi); // also renders release tails while stopped
     else
-        buffer.clear();
+        audio.clear();
+    if (buffer.getNumChannels() > 2)
+    {
+        float* trig = buffer.getWritePointer (2);
+        juce::FloatVectorOperations::clear (trig, buffer.getNumSamples());
+        if (const int note = triggerNote.load (std::memory_order_relaxed); note >= 0)
+            for (const auto m : blockMidi)
+            {
+                const auto msg = m.getMessage();
+                if (msg.isNoteOn() && msg.getNoteNumber() == note && m.samplePosition < buffer.getNumSamples())
+                    trig[m.samplePosition] = 1.0f; // any kick ducks by the full depth
+            }
+    }
     if (playing)
     {
         readPosition += n;
@@ -272,8 +289,26 @@ void ClipPlayerProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
 
 //==============================================================================
 ChannelStripProcessor::ChannelStripProcessor (juce::String n)
-    : EngineProcessorBase (stereoInOut()), name (std::move (n))
+    : EngineProcessorBase (BusesProperties()
+                               .withInput ("In", juce::AudioChannelSet::stereo(), true)
+                               .withInput ("Key", juce::AudioChannelSet::discreteChannels (3), true)
+                               .withOutput ("Out", juce::AudioChannelSet::stereo(), true)),
+      name (std::move (n)),
+      fx (*this, nullptr, "FX", fx::createParameterLayout())
 {
+    fxChain.bind (fx);
+}
+
+void ChannelStripProcessor::getStateInformation (juce::MemoryBlock& mb)
+{
+    if (auto xml = fx.copyState().createXml())
+        copyXmlToBinary (*xml, mb);
+}
+
+void ChannelStripProcessor::setStateInformation (const void* data, int size)
+{
+    if (auto xml = getXmlFromBinary (data, size); xml != nullptr && xml->hasTagName (fx.state.getType()))
+        fx.replaceState (juce::ValueTree::fromXml (*xml));
 }
 
 void ChannelStripProcessor::setGainDecibels (float dB) noexcept
@@ -281,24 +316,34 @@ void ChannelStripProcessor::setGainDecibels (float dB) noexcept
     gainLinear.store (juce::Decibels::decibelsToGain (dB, -100.0f), std::memory_order_relaxed);
 }
 
-void ChannelStripProcessor::prepareToPlay (double sampleRate, int)
+void ChannelStripProcessor::prepareToPlay (double sampleRate, int maxBlockSize)
 {
+    fxChain.prepare (sampleRate, maxBlockSize);
     smoother.reset (sampleRate, 0.02);
     smoother.setCurrentAndTargetValue (muted.load() ? 0.0f : gainLinear.load());
 }
 
 void ChannelStripProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
+    if (fxChain.isActive())
+    {
+        const bool hasKey = buffer.getNumChannels() >= 5;
+        const fx::SidechainKey key { hasKey ? buffer.getReadPointer (2) : nullptr,
+                                     hasKey ? buffer.getReadPointer (3) : nullptr,
+                                     hasKey ? buffer.getReadPointer (4) : nullptr };
+        fxChain.process (buffer.getArrayOfWritePointers(), 2, buffer.getNumSamples(), key);
+    }
     smoother.setTargetValue (muted.load (std::memory_order_relaxed) ? 0.0f
                                                                      : gainLinear.load (std::memory_order_relaxed));
 
+    const int numChannels = std::min (2, buffer.getNumChannels()); // the output bus
     if (! smoother.isSmoothing())
     {
-        buffer.applyGain (smoother.getTargetValue());
+        for (int ch = 0; ch < numChannels; ++ch)
+            buffer.applyGain (ch, 0, buffer.getNumSamples(), smoother.getTargetValue());
         return;
     }
 
-    const int numChannels = buffer.getNumChannels();
     for (int i = 0; i < buffer.getNumSamples(); ++i)
     {
         const float g = smoother.getNextValue();
