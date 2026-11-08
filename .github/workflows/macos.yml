@@ -209,6 +209,15 @@ jobs:
           "$CLI" audition tests/fixtures/house_124_Amin.wav --style house --out "$RUNNER_TEMP/house.audition.wav" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['progression'], d['chords_instrument']['name'], d['bass_instrument']['name'], d['drums'], d['notes'], 'x%.0f realtime' % d['realtime_factor'], 'peak %.2f' % d['peak']); sys.exit(0 if 0.05 < d['peak'] < 1.0 else 1)"
           "$CLI" audition tests/fixtures/house_124_Amin.wav --bypass --out "$RUNNER_TEMP/house.bypass.wav" | python3 -c "import json,sys; d=json.load(sys.stdin); print('bypass peak %.3f' % d['peak']); sys.exit(0 if d['peak'] < 0.5 else 1)"
 
+      - name: Insert FX (ducking keyed by the drums, tempo-synced delay, reverb, OTT) in the engine graph
+        run: |
+          CLI=build/tools/cli/app-cli_artefacts/Release/app-cli
+          "$CLI" audition --list-fx | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d['parameters']), 'parameters on', d['channels'])"
+          "$CLI" audition tests/fixtures/house_124_Amin.wav --style house \
+              --fx bass.duck_on=on --fx bass.duck_depth=0.9 --fx chords.reverb_on=on --fx chords.delay_on=on \
+              --fx "chords.delay_division=1/8 dotted" --fx drums.ott_on=on --fx drums.sat_on=on --out "$RUNNER_TEMP/house.fx.wav" \
+            | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['fx'], 'bpm %.1f' % d['bpm'], 'x%.0f realtime' % d['realtime_factor'], 'peak %.2f' % d['peak']); sys.exit(0 if 0.05 < d['peak'] < 1.0 else 1)"
+
       - name: VST3 hosting (out-of-process scan, the test plugin on the chords channel, project persistence)
         run: |
           CLI=build/tools/cli/app-cli_artefacts/Release/app-cli

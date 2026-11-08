@@ -9,6 +9,7 @@
 
 using namespace jaudios;
 using Catch::Matchers::WithinAbs;
+using Catch::Matchers::WithinRel;
 
 TEST_CASE ("AudioEngine plays a buffer through the graph bit-exactly at unity gain", "[scaffold][engine]")
 {
@@ -455,4 +456,133 @@ TEST_CASE ("Bypass set before prepare: the very first samples are the source alo
     const float g = juce::Decibels::decibelsToGain (-6.0f);
     for (int i = 0; i < 4096; ++i)
         REQUIRE (std::abs (out.getSample (0, i) - g * source->getSample (0, i)) < 1e-6f);
+}
+
+//==============================================================================
+// fx-chain in the engine graph: per-channel inserts, keyed by the drums clip / stem, tempo-synced.
+TEST_CASE ("FX: kicks from the drums clip duck another channel, even with the drums muted", "[engine][fx]")
+{
+    AudioEngine engine;
+    engine.setChannelMute (ChannelId::drums, true); // the key comes from the player, before its strip
+    engine.prepareOffline (44100.0, 128);
+    engine.setSource (test::makeSine (2, 44100, 220.0, 44100.0, 0.5f));
+    engine.setChannelInstrument (ChannelId::drums, std::make_shared<ImpulseInstrument>());
+    engine.setChannelClip (ChannelId::drums, clipAt ({ 22050 }, 36));
+    REQUIRE (engine.setFxParameter (ChannelId::source, "duck_on", "on"));
+    REQUIRE (engine.setFxParameter (ChannelId::source, "duck_depth", "0.75"));
+    REQUIRE_FALSE (engine.setFxParameter (ChannelId::source, "no_such_param", "1"));
+    engine.play();
+    const auto out = renderEngine (engine, 44100);
+    auto level = [&] (int from, int to) {
+        double s = 0;
+        for (int i = from; i < to; ++i)
+            s += (double) out.getSample (0, i) * out.getSample (0, i);
+        return std::sqrt (s / (to - from));
+    };
+    const double before = level (18000, 22000);
+    CHECK_THAT (before, WithinRel (0.5 / std::sqrt (2.0), 0.02));
+    CHECK_THAT (level (22100, 22500), WithinRel (0.3 * before, 0.1)); // 1 - 0.75 x the envelope (~0.95 here: 180 ms release)
+    CHECK (level (40000, 44000) > 0.85 * before);                        // released
+    // a kick on another note (snare 38) does not key it
+    engine.stop();
+    engine.seek (0);
+    engine.setChannelClip (ChannelId::drums, clipAt ({ 22050 }, 38));
+    engine.play();
+    const auto o2 = renderEngine (engine, 44100);
+    double s = 0;
+    for (int i = 22100; i < 22500; ++i)
+        s += (double) o2.getSample (0, i) * o2.getSample (0, i);
+    CHECK (std::sqrt (s / 400) > 0.9 * before);
+}
+
+TEST_CASE ("FX: the drums stem ducks another stem", "[engine][fx][stems]")
+{
+    AudioEngine engine;
+    engine.setChannelMute (ChannelId::stemDrums, true);
+    engine.prepareOffline (44100.0, 128);
+    const int n = 44100;
+    engine.setSource (test::makeSine (2, n, 220.0, 44100.0, 0.5f));
+    auto stems = std::make_shared<juce::AudioBuffer<float>> (8, n);
+    stems->clear();
+    for (int i = 0; i < n; ++i)
+        for (int ch = 0; ch < 2; ++ch)
+            stems->setSample (4 + ch, i, 0.5f * (float) std::sin (juce::MathConstants<double>::twoPi * 220.0 * i / 44100.0)); // "other"
+    for (int j = 0; j < 3000; ++j)
+        for (int ch = 0; ch < 2; ++ch)
+            stems->setSample (ch, 22050 + j, 0.8f * std::exp ((float) -j / 600.0f) * (float) std::sin (j * 0.02)); // a kick on the drums stem
+    REQUIRE (engine.setStems (stems));
+    REQUIRE (engine.setFxParameter (ChannelId::stemOther, "duck_on", "on"));
+    REQUIRE (engine.setFxParameter (ChannelId::stemOther, "duck_source", "Drums stem"));
+    REQUIRE (engine.setFxParameter (ChannelId::stemOther, "duck_depth", "0.8"));
+    engine.play();
+    const auto out = renderEngine (engine, n);
+    auto level = [&] (int from, int to) {
+        double s = 0;
+        for (int i = from; i < to; ++i)
+            s += (double) out.getSample (0, i) * out.getSample (0, i);
+        return std::sqrt (s / (to - from));
+    };
+    CHECK (level (22300, 22700) < 0.4 * level (18000, 22000));
+}
+
+TEST_CASE ("FX: the delay follows the engine's tempo", "[engine][fx]")
+{
+    AudioEngine engine;
+    engine.prepareOffline (44100.0, 128);
+    auto silent = std::make_shared<juce::AudioBuffer<float>> (2, 44100);
+    silent->clear();
+    engine.setSource (silent);
+    engine.setChannelInstrument (ChannelId::chords, std::make_shared<ImpulseInstrument>());
+    engine.setChannelClip (ChannelId::chords, clipAt ({ 2000 }));
+    engine.setTempo (100.0);
+    REQUIRE (engine.setFxParameter (ChannelId::chords, "delay_on", "on"));
+    REQUIRE (engine.setFxParameter (ChannelId::chords, "delay_division", "1/4"));
+    REQUIRE (engine.setFxParameter (ChannelId::chords, "delay_mix", "0.5"));
+    engine.play();
+    const auto out = renderEngine (engine, 44100);
+    // the impulse (left) plus a mono-summed echo one beat later (0.6 s at 100 bpm)
+    CHECK_THAT (out.getSample (0, 2000), WithinAbs (1.0, 1e-4));
+    CHECK_THAT (out.getSample (0, 2000 + 26460), WithinAbs (0.25, 1e-4)); // 0.5 (mono sum) x 0.5 mix
+}
+
+TEST_CASE ("FX state round-trips through the strip (project files)", "[engine][fx]")
+{
+    AudioEngine engine;
+    REQUIRE (engine.setFxParameter (ChannelId::bass, "filter_on", "on"));
+    REQUIRE (engine.setFxParameter (ChannelId::bass, "filter_cutoff", "350"));
+    const auto saved = engine.fxState (ChannelId::bass)->copyState();
+    AudioEngine other;
+    other.fxState (ChannelId::bass)->replaceState (saved.createCopy());
+    CHECK_THAT (other.fxState (ChannelId::bass)->getRawParameterValue ("filter_cutoff")->load(), WithinRel (350.0f, 1e-3f));
+    CHECK (other.fxState (ChannelId::bass)->getRawParameterValue ("filter_on")->load() == 1.0f);
+    CHECK (other.fxState (ChannelId::chords)->getRawParameterValue ("filter_on")->load() == 0.0f);
+}
+
+TEST_CASE ("The graph with every FX stage on every channel performs zero allocations", "[engine][fx][rt]")
+{
+    if (! rt::isTrapInstalled())
+        SKIP ("realtime trap not linked; run tools/rt_check.sh");
+    AudioEngine engine;
+    engine.prepareOffline (44100.0, 128);
+    engine.setSource (test::makeSine (2, 44100, 220.0, 44100.0));
+    engine.setChannelInstrument (ChannelId::drums, std::make_shared<synth::DrumInstrument>());
+    auto drums = std::make_shared<MidiClip>();
+    for (juce::int64 t = 0; t < 44100; t += 5512)
+        drums->push_back ({ t, juce::MidiMessage::noteOn (10, 36, (juce::uint8) 110) });
+    engine.setChannelClip (ChannelId::drums, drums);
+    for (int c = 0; c < numChannelIds; ++c)
+        for (const char* id : { "filter_on", "sat_on", "ott_on", "duck_on", "delay_on", "reverb_on" })
+            REQUIRE (engine.setFxParameter ((ChannelId) c, id, "on"));
+    engine.play();
+    juce::AudioBuffer<float> block (2, 128);
+    rt::resetStats();
+    for (int pos = 0; pos < 44100; pos += 128)
+    {
+        if (pos % 4096 == 0) // automation while it plays (message thread, outside the section)
+            for (int c = 0; c < numChannelIds; ++c)
+                engine.setFxParameter ((ChannelId) c, "filter_cutoff", juce::String (200 + pos / 10));
+        engine.renderBlock (block.getArrayOfWritePointers(), 2, 128);
+    }
+    CHECK (rt::getStats().allocations == 0);
+    CHECK (rt::getStats().deallocations == 0);
 }

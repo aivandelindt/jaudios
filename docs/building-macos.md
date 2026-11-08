@@ -289,6 +289,26 @@ The build also makes a small test instrument, `JAudios Test Synth`, under
 `build/tests/plugins/TestSynth/` for the tests and CI. It's never installed or shipped. To try
 hosting without third-party plugins: `"$CLI" plugins scan --path build/tests/plugins/TestSynth/JAudiosTestSynth_artefacts/Release/VST3`.
 
+## 3i. Insert FX
+
+Every channel (source, the four stems, chords, bass, drums) has its own insert chain, processed
+in this order: filter → saturation → OTT-style 3-band compressor → sidechain duck → ping-pong
+delay → reverb. Each stage is off until you switch it on. The ducker is keyed by the kicks of the
+generated drums ("Kick events") or by the drums stem. The delay is synced to the detected tempo.
+Every parameter change is smoothed: the tests sweep each one and check the spectrum for zipper
+noise.
+
+```bash
+CLI=build/tools/cli/app-cli_artefacts/Release/app-cli
+"$CLI" audition --list-fx      # channels, parameters, ranges, choices
+"$CLI" audition tests/fixtures/house_124_Amin.wav --style house \
+    --fx bass.duck_on=on --fx bass.duck_depth=0.9 \
+    --fx chords.reverb_on=on --fx chords.delay_on=on --fx "chords.delay_division=1/8 dotted" \
+    --fx drums.ott_on=on --out /tmp/house.fx.wav
+```
+
+Values are plain units (Hz, dB, ms), `on` / `off` for switches, and a choice by name.
+
 ## 4. Run
 
 The app:

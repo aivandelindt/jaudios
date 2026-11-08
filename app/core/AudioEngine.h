@@ -80,6 +80,13 @@ public:
     void setChannelSolo (ChannelId, bool);
     void setMasterGainDecibels (float dB);
 
+    /** A channel's insert FX (fx-chain): its parameter tree (the UI attaches to it), and a setter
+        taking plain values ("filter_cutoff", "800"; a choice by name; "on"/"off"). Message thread. */
+    juce::AudioProcessorValueTreeState* fxState (ChannelId) noexcept;
+    bool setFxParameter (ChannelId, juce::StringRef id, const juce::String& value);
+    /** Tempo for the tempo-synced FX (delay), e.g. the detected BPM. */
+    void setTempo (double bpm) noexcept;
+
     // --- info -----------------------------------------------------------------------------
     double getSampleRate() const noexcept { return preparedSampleRate; }
     int getBlockSize() const noexcept { return preparedBlockSize; }
@@ -102,6 +109,7 @@ private:
     SourcePlayerProcessor* sourcePlayer = nullptr; // owned by graph
     ClipPlayerProcessor* clipPlayer (ChannelId) const noexcept;
     std::array<ClipPlayerProcessor*, 3> clipPlayers {}; // chords, bass, drums (owned by graph)
+    std::array<juce::AudioProcessorGraph::NodeID, 3> playerNodes {};
     bool bypassed = false;
     std::array<ChannelStripProcessor*, numChannelIds> strips {};
     ChannelStripProcessor* master = nullptr;

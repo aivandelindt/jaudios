@@ -107,5 +107,5 @@ jaudios_engine_lib(engine_synth
             ${CMAKE_CURRENT_BINARY_DIR}/SfzPresetsEmbedded.cpp
     DEPS engine_generators jaudios_juce)
 target_link_libraries(engine_synth PRIVATE sfizz::sfizz)
-jaudios_engine_lib(engine_fx         DEPS jaudios_juce)
+jaudios_engine_lib(engine_fx         SOURCES fx/FxChain.cpp DEPS jaudios_juce)
 jaudios_engine_lib(engine_export     DEPS jaudios_juce)

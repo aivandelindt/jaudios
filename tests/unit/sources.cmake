@@ -28,4 +28,6 @@ set(JAUDIOS_TEST_SOURCES
     # drum-generator
     ${CMAKE_CURRENT_LIST_DIR}/test_drums.cpp
     # synth-and-vst3-host
-    ${CMAKE_CURRENT_LIST_DIR}/test_instruments.cpp)
+    ${CMAKE_CURRENT_LIST_DIR}/test_instruments.cpp
+    # fx-chain
+    ${CMAKE_CURRENT_LIST_DIR}/test_fx.cpp)
