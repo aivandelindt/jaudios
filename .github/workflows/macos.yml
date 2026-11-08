@@ -218,6 +218,23 @@ jobs:
               --fx "chords.delay_division=1/8 dotted" --fx drums.ott_on=on --fx drums.sat_on=on --out "$RUNNER_TEMP/house.fx.wav" \
             | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['fx'], 'bpm %.1f' % d['bpm'], 'x%.0f realtime' % d['realtime_factor'], 'peak %.2f' % d['peak']); sys.exit(0 if 0.05 < d['peak'] < 1.0 else 1)"
 
+      - name: Export (bar-aligned WAV + MIDI for a DAW, project file), also for a song starting on a pickup
+        run: |
+          CLI=build/tools/cli/app-cli_artefacts/Release/app-cli
+          "$CLI" export tests/fixtures/house_124_Amin.wav --style house --fx chords.reverb_on=on --out "$RUNNER_TEMP/export" \
+            | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d['files']), 'files, grid', d['grid'], '%.0f ms' % d['export_ms'])"
+          python3 tools/check_export_alignment.py "$RUNNER_TEMP/export"
+          # the same song with 0.6 s of music before bar 1: a bar is prepended, bar 2 starts on the downbeat
+          python3 - "$RUNNER_TEMP/pickup.wav" <<'PY'
+          import sys, wave
+          src = wave.open("tests/fixtures/house_124_Amin.wav", "rb"); p = src.getparams(); f = src.readframes(src.getnframes())
+          n = int(0.6 * p.framerate) * p.sampwidth * p.nchannels
+          out = wave.open(sys.argv[1], "wb"); out.setparams(p); out.writeframes(f[-n:] + f); out.close()
+          PY
+          "$CLI" export "$RUNNER_TEMP/pickup.wav" --style house --out "$RUNNER_TEMP/export-pickup" \
+            | python3 -c "import json,sys; g=json.load(sys.stdin)['grid']; print(g); sys.exit(0 if abs(g['first_downbeat_beat'] - 4.0) < 1e-6 else 1)"
+          python3 tools/check_export_alignment.py "$RUNNER_TEMP/export-pickup"
+
       - name: VST3 hosting (out-of-process scan, the test plugin on the chords channel, project persistence)
         run: |
           CLI=build/tools/cli/app-cli_artefacts/Release/app-cli

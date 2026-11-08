@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Export and drag-and-drop (M9, export-and-drag-drop)
+- `engine/export` (`engine_export`; no new dependency):
+  - `BarGrid`: beat 0 is a bar line at or before the start of the source, with bars prepended for a pickup. Beats follow the detected
+    beat grid, so tempo drift is kept.
+  - `makeMidiFile`: type 1 at 960 PPQ. The conductor track has the song name, a tempo map (one event per beat that changes by
+    > 0.1 %), 4/4 and the key signature; part tracks are named, with notes on the grid's ticks.
+  - `writeWav`: 24-bit or float, at the source rate. `alignToGrid` pads the prepended bars.
+- `app/core/ExportService`:
+  - `renderPart` solos a part (the mix, chords, bass, drums, a stem) and renders it offline through the engine graph, with
+    instruments and FX, plus a tail after the transport stops.
+  - `DragSession`: a per-run temp folder for dragged files.
+- `app/gui/ExternalDrag`: `dragFilesOut()` wraps JUCE's external file drag, for the UI shell to call.
+- Project file v2 (`app/core/Project`): the source path and SHA-256, the key, BPM, beats and downbeats, the progression and chords,
+  the bass and drum patterns, the instrument slots (still "slots", so version 1 readers and files keep working), the FX state of each
+  channel with a stage on, and the exported assets. `audition --save-project` writes it, and `--project` restores the FX too.
+- `app-cli export`: WAVs, per-part and all-parts MIDI, and the project file. It takes `--parts`, `--wav 24|float`, `--tail`,
+  `--no-wav`, `--name` and every `audition` option.
+- `tools/check_export_alignment.py` (stdlib) reads an export back as a DAW would: tempo, 4/4, key, track names, kicks on the 1/16
+  grid and on beats, and every kick's onset in the drums WAV at its MIDI time. On the house fixture the worst onset is 0.17 ms off;
+  with a 0.6 s pickup in front, bar 1 is prepended and the first downbeat is tick 3840, also within 0.18 ms. macOS CI runs both.
+- Tests: the grid (pickup, on-time start, drift, no beats); key signatures; MIDI read back; the tempo map against a drifting grid; WAV
+  formats; exported kicks on bar lines in ticks and samples; soloed renders summing to the mix within 1e-4 (the duck keyed by drums
+  that aren't soloed); reverb tails; project v2 round trip with FX; reading version 1 files.
+- Fix: the drum sampler's round-robin carried over between renders, so every export started on a different variation. `prepare`
+  now resets it, and voices too, so a render from the start is reproducible.
+
 ### Insert FX (M8, fx-chain)
 - `engine/fx` (`engine_fx`, JUCE DSP; no new dependency). `FxChain` runs six stages, in this order:
   - **Filter:** a TPT state-variable filter computing low-, band- and high-pass together, so changing the type crossfades.

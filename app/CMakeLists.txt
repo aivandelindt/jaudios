@@ -3,14 +3,16 @@ add_library(app_core STATIC
     core/AnalysisService.cpp
     core/AudioEngine.cpp
     core/EngineProcessors.cpp
+    core/ExportService.cpp
     core/HarmonySource.cpp
     core/InstrumentSlot.cpp
+    core/Project.cpp
     core/PluginHost.cpp
     core/OfflineRender.cpp
     core/RealtimeTrap.cpp)
 target_include_directories(app_core PUBLIC ${PROJECT_SOURCE_DIR})
 target_link_libraries(app_core
-    PUBLIC  jaudios_juce engine_analysis engine_theory engine_generators engine_synth engine_fx
+    PUBLIC  jaudios_juce engine_analysis engine_theory engine_generators engine_synth engine_fx engine_export
     PRIVATE jaudios_warnings)
 target_compile_definitions(app_core PUBLIC JAUDIOS_VERSION_STRING="${PROJECT_VERSION}")
 
@@ -31,6 +33,7 @@ if(JAUDIOS_BUILD_APP)
 
     target_sources(JAudios PRIVATE
         gui/Main.cpp
+        gui/ExternalDrag.cpp
         gui/MainComponent.cpp
         gui/WaveformView.cpp)
 

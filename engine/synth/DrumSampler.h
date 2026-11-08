@@ -46,6 +46,9 @@ public:
     juce::SynthesiserVoice* findFreeVoice (juce::SynthesiserSound*, int midiChannel, int midiNoteNumber, bool stealIfNoneAvailable) const override;
     /** Mute every element but `only` (offline per-element export). */
     void solo (std::optional<DrumElement> only) noexcept { soloElement = only; }
+    /** Silences every voice and restarts each element's round-robin cycle, so a render from the
+        transport start sounds the same every time (exports). Not on the audio thread while playing. */
+    void reset();
 
 private:
     std::optional<DrumElement> soloElement;

@@ -108,4 +108,4 @@ jaudios_engine_lib(engine_synth
     DEPS engine_generators jaudios_juce)
 target_link_libraries(engine_synth PRIVATE sfizz::sfizz)
 jaudios_engine_lib(engine_fx         SOURCES fx/FxChain.cpp DEPS jaudios_juce)
-jaudios_engine_lib(engine_export     DEPS jaudios_juce)
+jaudios_engine_lib(engine_export     SOURCES export/Export.cpp DEPS engine_theory jaudios_juce)
