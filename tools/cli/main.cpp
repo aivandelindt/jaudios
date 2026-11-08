@@ -58,6 +58,7 @@
 #include "engine/util/Sha256.h"
 #include "app/core/OfflineRender.h"
 #include "app/core/RealtimeTrap.h"
+#include "app/core/SongPipeline.h"
 #include "engine/analysis/Analysis.h"
 #include "engine/analysis/AudioImport.h"
 #include "engine/analysis/key/KeyDetector.h"
@@ -281,62 +282,24 @@ void writeWav (const juce::File& dest, const juce::AudioBuffer<float>& b, double
 }
 
 /** Stems for a capture, from the stem cache or HT-Demucs; on the AnalysisService worker like the app. */
-struct SeparationRun
+/** Stems for a capture (stem cache or HT-Demucs), on the AnalysisService worker like the app. */
+jaudios::StemRun runSeparation (const jaudios::analysis::CaptureResult& capture, bool useCache)
 {
-    std::optional<jaudios::analysis::stems::StemSeparator::Result> result;
-    juce::String provider, origin, error, key;
-    double loadMs = 0.0;
-    bool cacheHit = false;
-    bool ok() const { return result && result->stems; }
-};
-
-SeparationRun runSeparation (const jaudios::analysis::CaptureResult& capture, bool useCache)
-{
-    using namespace jaudios::analysis;
-    SeparationRun run;
-    const auto config = AppConfig::fromEnvironment();
-    const auto model = findModelFile (config, "htdemucs.onnx");
-    if (model == juce::File())
-    {
-        run.error = "htdemucs.onnx not found (python3 tools/models.py --only demucs --python <env>, or set JAUDIOS_MODELS_DIR)";
-        return run;
-    }
-    const auto cacheDirEnv = juce::SystemStats::getEnvironmentVariable ("JAUDIOS_STEM_CACHE_DIR", {});
-    const stems::StemCache cache (cacheDirEnv.isNotEmpty() ? juce::File (cacheDirEnv) : stems::StemCache::defaultDirectory());
-
     jaudios::AnalysisService service;
-    service.submit<stems::StemSeparator::Result> (
+    jaudios::StemRun run;
+    service.submit<jaudios::StemRun> (
         [&] {
-            const auto t0 = juce::Time::getMillisecondCounterHiRes();
-            stems::StemSeparator sep ({ model, config.onnxCoreML });
-            run.loadMs = juce::Time::getMillisecondCounterHiRes() - t0;
-            run.provider = sep.executionProvider();
-            run.origin = sep.modelOrigin();
-            if (! sep.isReady())
-                return stems::StemSeparator::Result { {}, sep.loadError() };
-
-            run.key = stems::StemCache::keyFor (capture.buffer, capture.sampleRate, sep.cacheId());
-            if (useCache)
-                if (auto cached = cache.load (run.key))
-                {
-                    run.cacheHit = true;
-                    stems::StemSeparator::Result r;
-                    r.stems = std::move (cached);
-                    return r;
-                }
-
-            auto r = sep.separate (capture.buffer, capture.sampleRate, [] (double p) {
+            auto r = jaudios::separateStems (capture, useCache, [] (double p) {
                 std::cerr << "\rseparating " << juce::roundToInt (p * 100.0) << " %" << std::flush;
             });
-            std::cerr << "\n";
-            if (useCache && r.stems && cache.store (run.key, *r.stems))
-                cache.prune();
+            if (! r.cacheHit && r.stems)
+                std::cerr << "\n";
             return r;
         },
-        [&] (stems::StemSeparator::Result r) { run.result = std::move (r); });
+        [&] (jaudios::StemRun r) { run = std::move (r); });
     service.waitUntilIdle();
-    if (! run.ok() && run.error.isEmpty())
-        run.error = run.result ? run.result->error : juce::String ("separation did not run");
+    if (! run.stems && run.error.isEmpty())
+        run.error = "separation did not run";
     return run;
 }
 
@@ -351,21 +314,20 @@ int cmdSeparate (const juce::File& file, juce::File outDir, const jaudios::analy
         outDir = file.getSiblingFile (file.getFileNameWithoutExtension() + ".stems");
 
     const auto run = runSeparation (*capture, useCache);
-    if (! run.ok())
+    if (! run.stems)
     {
         std::cerr << "error: " << run.error << "\n";
         return 1;
     }
-    const auto& result = run.result;
     const auto& provider = run.provider;
     const auto& origin = run.origin;
-    const auto& key = run.key;
+    const auto& key = run.cacheKey;
     const auto loadMs = run.loadMs;
     const auto cacheHit = run.cacheHit;
     const auto model = findModelFile (AppConfig::fromEnvironment(), "htdemucs.onnx");
 
     outDir.createDirectory();
-    const auto& st = *result->stems;
+    const auto& st = *run.stems;
     const int n = st.getNumSamples();
     auto rmsDb = [] (double sq, int count) { return 20.0 * std::log10 (std::max (std::sqrt (sq / std::max (1, count)), 1e-12)); };
 
@@ -414,9 +376,9 @@ int cmdSeparate (const juce::File& file, juce::File outDir, const jaudios::analy
         { "model_load_ms", loadMs },
         { "cache", useCache ? (cacheHit ? "hit" : "stored") : "off" },
         { "cache_key", key },
-        { "segments", result->segments },
-        { "separate_sec", result->seconds },
-        { "realtime_factor", durationSec / std::max (1e-6, result->seconds) },
+        { "segments", run.segments },
+        { "separate_sec", run.separateSec },
+        { "realtime_factor", durationSec / std::max (1e-6, run.separateSec) },
         { "null_residual_dbfs", rmsDb (residual, 2 * n) },
         { "stems", files },
         { "guide", guide.empty() ? var() : makeObject ({ { "stems", guide.toString() }, { "path", guideFile.getFullPathName() } }) },
@@ -470,13 +432,13 @@ int cmdTranscribe (const juce::File& file, TranscribeOptions opt)
     if (opt.stem != "mix")
     {
         const auto run = runSeparation (*capture, opt.useCache);
-        if (! run.ok())
+        if (! run.stems)
         {
             std::cerr << "error: " << run.error << "\n";
             return 1;
         }
         separation = run.cacheHit ? "cache" : "htdemucs (" + run.provider + ")";
-        const auto& st = *run.result->stems;
+        const auto& st = *run.stems;
         if (opt.stem == "guide")
             audio = stems::mixGuide (st);
         else if (const auto s = stems::stemFromName (opt.stem))
@@ -585,6 +547,7 @@ struct ChordOptions
 /** Key + beat grid + melody / bass evidence + chord suggestions (shared by `chords` and `bass`). */
 struct HarmonyRun
 {
+    jaudios::SongAnalysis song;   // the shared pipeline's result (the fields below mirror it)
     jaudios::analysis::AnalysisResult analysis;
     jaudios::generators::HarmonicSource source;
     std::vector<jaudios::generators::Progression> progressions;
@@ -599,76 +562,48 @@ struct HarmonyRun
 std::optional<HarmonyRun> runHarmony (const jaudios::analysis::CaptureResult& capture, const jaudios::generators::EngineSettings& engine,
                                       bool useStems, bool useCache)
 {
-    using namespace jaudios::analysis;
     namespace gen = jaudios::generators;
-    namespace tr = jaudios::analysis::transcription;
-    const auto config = AppConfig::fromEnvironment();
-    const auto bpModel = findModelFile (config, "basic_pitch.onnx");
-    if (bpModel == juce::File())
-    {
-        std::cerr << "error: basic_pitch.onnx not found (python3 tools/models.py --only basic_pitch, or set JAUDIOS_MODELS_DIR)\n";
-        return std::nullopt;
-    }
-
-    HarmonyRun o;
-    // melody / bass evidence: the guide + bass stems (--stems), or the mix split at C3
+    // stems first (with progress on the terminal), then the rest of the pipeline on the worker, as in the app
+    jaudios::SongSettings settings { engine, false, useCache };
+    std::optional<jaudios::analysis::stems::Stems> stems;
+    juce::String separation = "none";
     if (useStems)
     {
-        const auto run = runSeparation (capture, useCache);
-        if (! run.ok())
+        auto run = runSeparation (capture, useCache);
+        if (! run.stems)
         {
             std::cerr << "error: " << run.error << "\n";
             return std::nullopt;
         }
-        o.separation = run.cacheHit ? "cache" : "htdemucs (" + run.provider + ")";
-        o.stems = *run.result->stems;
+        separation = run.cacheHit ? juce::String ("cache") : "htdemucs (" + run.provider + ")";
+        stems = std::move (run.stems);
     }
-
-    auto keyDetector = makeKeyDetector (config);
     jaudios::AnalysisService service;
-    std::optional<HarmonyRun> result;
-    service.submit<HarmonyRun> (
-        [&] {
-            o.analysis = analyze (capture, *keyDetector.detector);
-            tr::AudioToMidi a2m (bpModel);
-            std::vector<tr::Note> melody, bass;
-            if (o.stems)
-            {
-                tr::TranscriptionSettings mono;
-                mono.monophonic = true;
-                melody = a2m.transcribe (stems::mixGuide (*o.stems), capture.sampleRate).notes;
-                bass = a2m.transcribe ((*o.stems)[stems::Stem::bass], capture.sampleRate, mono).notes;
-                o.vocals = a2m.transcribe ((*o.stems)[stems::Stem::vocals], capture.sampleRate).notes;
-            }
-            else
-            {
-                const auto t = a2m.transcribe (capture.buffer, capture.sampleRate);
-                if (! t.ok())
-                {
-                    o.error = t.error;
-                    return std::move (o);
-                }
-                jaudios::splitBass (t.notes, 48, melody, bass);
-            }
-            o.melodyNotes = (int) melody.size();
-            o.bassNotes = (int) bass.size();
-            o.source = jaudios::makeHarmonicSource (o.analysis, capture.durationSeconds(), melody, bass);
-            const auto t0 = juce::Time::getMillisecondCounterHiRes();
-            o.progressions = gen::suggest (o.source, engine);
-            o.engineMs = juce::Time::getMillisecondCounterHiRes() - t0;
-            if (! o.progressions.empty())
-                for (int slot = 0; slot < std::min<int> (4, (int) o.progressions[0].chords.size()); ++slot)
-                    o.alts.push_back (gen::alternatives (o.source, o.progressions[0], slot, engine));
-            return std::move (o);
-        },
-        [&] (HarmonyRun r) { result = std::move (r); });
+    std::optional<jaudios::SongAnalysis> song;
+    juce::String error;
+    service.submit<std::optional<jaudios::SongAnalysis>> (
+        [&] { return jaudios::analyseSong (capture, settings, error, nullptr, std::move (stems), separation); },
+        [&] (std::optional<jaudios::SongAnalysis> r) { song = std::move (r); });
     service.waitUntilIdle();
-    if (! result || result->error.isNotEmpty() || result->progressions.empty())
+    if (! song)
     {
-        std::cerr << "error: " << (result && result->error.isNotEmpty() ? result->error : juce::String ("no progression (no bars found)")) << "\n";
+        std::cerr << "error: " << (error.isNotEmpty() ? error : juce::String ("analysis did not run")) << "\n";
         return std::nullopt;
     }
-    return result;
+    HarmonyRun o;
+    o.song = *song;
+    o.analysis = song->analysis;
+    o.source = song->source;
+    o.progressions = song->progressions;
+    o.stems = song->stems;
+    o.vocals = song->vocals;
+    o.separation = song->separation;
+    o.engineMs = song->engineMs;
+    o.melodyNotes = song->melodyNotes;
+    o.bassNotes = song->bassNotes;
+    for (int slot = 0; slot < std::min<int> (4, (int) o.progressions[0].chords.size()); ++slot)
+        o.alts.push_back (gen::alternatives (o.source, o.progressions[0], slot, engine));
+    return o;
 }
 
 int cmdChords (const juce::File& file, ChordOptions opt)
@@ -1245,37 +1180,11 @@ int cmdAudition (const juce::File& file, AuditionOptions opt)
         return 1;
     const auto& top = harmony->progressions.front();
     const auto key = harmony->source.key;
-    gen::BassInput bassIn;
-    bassIn.key = key;
-    for (const auto& b : harmony->source.bars)
-        bassIn.bars.push_back ({ b.startSec, b.endSec });
-    bassIn.progression = top;
-    {
-        juce::AudioBuffer<float> mono (1, capture->buffer.getNumSamples());
-        mono.clear();
-        for (int ch = 0; ch < capture->buffer.getNumChannels(); ++ch)
-            mono.addFrom (0, 0, capture->buffer, ch, 0, mono.getNumSamples(), 1.0f / (float) capture->buffer.getNumChannels());
-        bassIn.kicks = detectKicks (mono.getReadPointer (0), mono.getNumSamples(), capture->sampleRate);
-    }
-    const auto bassNotes = gen::generateBass (bassIn, *gen::bassPatternsFor (style).front());
-    gen::DrumSettings drumSettings;
-    drumSettings.includeKick = true;
-    const auto drumNotes = opt.drums ? gen::generateDrums (bassIn.bars, *gen::drumPatternsFor (style).front(), drumSettings)
-                                     : std::vector<gen::DrumNote> {};
-
-    juce::MidiMessageSequence chordSeq, bassSeq;
-    for (const auto& n : gen::render (top))
-    {
-        chordSeq.addEvent (juce::MidiMessage::noteOn (1, n.pitch, (juce::uint8) n.velocity).withTimeStamp (n.startSec));
-        chordSeq.addEvent (juce::MidiMessage::noteOff (1, n.pitch).withTimeStamp (n.endSec));
-    }
-    for (const auto& n : bassNotes)
-    {
-        bassSeq.addEvent (juce::MidiMessage::noteOn (1, n.pitch, (juce::uint8) n.velocity).withTimeStamp (n.startSec));
-        bassSeq.addEvent (juce::MidiMessage::noteOff (1, n.pitch).withTimeStamp (n.endSec));
-    }
-    chordSeq.sort();
-    bassSeq.sort();
+    const auto generated = jaudios::generateParts (harmony->song, top, style, opt.drums);
+    const auto& bassNotes = generated.bassNotes;
+    const auto& drumNotes = generated.drumNotes;
+    const auto& chordSeq = generated.chords;
+    const auto& bassSeq = generated.bass;
 
     // the engine graph, exactly as the app plays it (offline: fixed 512-sample device blocks)
     jaudios::AudioEngine engine;

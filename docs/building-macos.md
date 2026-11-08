@@ -343,9 +343,30 @@ The app:
 open build/app/JAudios_artefacts/Release/JAudios.app
 ```
 
-Drop an audio file on the waveform, or use **Open…**. WAV, AIFF, FLAC, Ogg, MP3 and M4A are
+Drop an audio file on the window, or use **Open…**. WAV, AIFF, FLAC, Ogg, MP3 and M4A are
 supported; MP3/M4A decode through Core Audio. macOS asks for microphone permission the first time
-the app opens an audio input.
+the app opens an audio input. The Basic Pitch model (section 3c) must be installed: the app runs the
+same analysis as `app-cli audition` (key, beats, notes, chord suggestions) before it shows the song.
+
+The window, top to bottom:
+
+- **Transport bar:** Open, Play/Stop, the position (bar.beat on the export grid), the song's key and
+  tempo, the **style** (it picks the progressions, the bass and drum patterns and the sounds), the
+  **suggested progressions** (best first), and Undo/Redo.
+- **Source:** the waveform with numbered bars; click or drag in it to move the playhead. With stems,
+  their strips sit underneath it.
+- **Chords:** one block per chord. Click one for its alternatives. Hovering an alternative shows it
+  on the little piano, and clicking it puts it in; the bassline follows. A dot marks a changed
+  chord, and "Back to the suggestion" undoes it.
+- **Bass** (piano roll; notes that will be ducked by kicks are outlined) and **Drums** (one row per
+  element). Every lane has its channel's mute, solo, gain and **FX** (the insert chain from
+  section 3i).
+- **Export tiles** (right): drag a tile into your DAW. MIDI tiles are written instantly; WAV tiles
+  are rendered as the drag starts, through a second engine set up like the one playing (same
+  sounds, FX and mixer). The files are bar-aligned, as in section 3j.
+
+Keys: Space plays/stops, Cmd+Z / Cmd+Shift+Z undo/redo (chords, progression, style, mixer),
+Cmd+0 shows the whole song. Pinch or Cmd+scroll zooms around the pointer, and scrolling pans.
 
 The CLI on a fixture:
 

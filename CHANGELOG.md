@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### UI shell, part 1 (M10a, ui-shell)
+- `app/core/SongPipeline`: the import → stems (optional) → key and beats → transcription → evidence → suggestions → parts pipeline,
+  moved out of `app-cli` so the app and the CLI share one implementation. CLI outputs are unchanged: audition peaks and note counts,
+  and the export alignment (0.17 ms).
+- `app/core/SongController`: the song being edited.
+  - The style, the chosen progression, the chord replacements and the mixer (gain, mute, solo per channel) live in a `ValueTree`
+    with an `UndoManager`.
+  - Every change, whether an action or an undo / redo, reaches the engine through the tree's listener: new clips for the
+    generated channels, settings for the strips.
+  - A changed chord regenerates the bassline on it. A style change re-suggests and switches the default sounds.
+  - Each fader drag is one undo step.
+  - Export tiles: MIDI per part, or a WAV rendered through a second, identically set-up engine, so playback is never interrupted.
+- `app/gui` (the `app_gui` library, also linked by the UI tests), an original design (palette, layout, strings):
+  - a transport bar;
+  - the source lane (waveform from cached peaks, numbered bars from the export grid, click to seek);
+  - stem strips;
+  - the chord lane (blocks with name and Roman numeral; click opens an alternatives popup with a piano and fit bars);
+  - bass and drum lanes;
+  - channel headers (M, S, gain, FX opening the strip's parameters);
+  - export tiles (drag into a DAW).
+
+  Pinch or Cmd+scroll zooms around the pointer and scrolling pans. Space plays and stops, Cmd+Z / Cmd+Shift+Z undo and redo,
+  Cmd+0 shows everything. The playhead updates at 60 Hz with two narrow repaints.
+- Tests:
+  - `SongController`, 6 cases: parts on the engine; progression, chord, style and mixer actions with undo / redo; the bass
+    following a replaced chord; export tiles.
+  - `jaudios_ui_tests`, 8 headless cases: timeline zoom and scroll; a snapshot where every lane paints its part; chord click →
+    alternatives → replace → Cmd+Z; Space; Cmd+scroll, pinch and Cmd+0; headers and undo; export tiles; repaint cost. A full repaint
+    of a 3-minute song has a median of ~2 ms, against the 16.7 ms budget.
+  - The app also ran end to end under Xvfb on a fixture.
+- Next (M10b): the bass and drum accent editor, R to record (needs live capture), and WAV tiles rendered off the message thread.
+
 ### Export and drag-and-drop (M9, export-and-drag-drop)
 - `engine/export` (`engine_export`; no new dependency):
   - `BarGrid`: beat 0 is a bar line at or before the start of the source, with bars prepended for a pickup. Beats follow the detected
