@@ -5,6 +5,7 @@
 
 #include "app/core/AnalysisService.h"
 #include "app/core/AudioEngine.h"
+#include "app/core/CaptureSources.h"
 #include "app/core/ExportService.h"
 #include "app/core/SongController.h"
 #include "app/core/SongPipeline.h"
@@ -31,6 +32,10 @@ public:
     void resized() override;
 
     void importFile (const juce::File& file);
+    /** R / the Record button: starts a live capture from the last source (or asks which), or stops
+        it and analyses what was captured like an opened file. */
+    void toggleRecording();
+    bool keyPressed (const juce::KeyPress&) override;
 
     bool isInterestedInFileDrag (const juce::StringArray& files) override;
     void filesDropped (const juce::StringArray& files, int, int) override;
@@ -48,6 +53,10 @@ private:
     void showAudioSettings();
     void showOpenDialog();
     void onImported (ImportJobResult result);
+    void analyse (std::function<analysis::ImportResult()> load, const juce::String& what);
+    void showCaptureMenu();
+    void startCapture (const juce::String& sourceId);
+    void stopCapture();
     void refreshTransport();
     void setStatus (const juce::String&);
 
@@ -59,8 +68,16 @@ private:
     DragSession dragSession;
     std::unique_ptr<SongController> song;
 
-    juce::TextButton openButton { "Open..." }, playButton { "Play" }, undoButton { "Undo" }, redoButton { "Redo" },
-        settingsButton { "Audio..." };
+    juce::TextButton openButton { "Open..." }, recordButton { "Record" }, playButton { "Play" }, undoButton { "Undo" },
+        redoButton { "Redo" }, settingsButton { "Audio..." };
+    struct LevelMeter final : juce::Component
+    {
+        float level = 0.0f; // 0..1, decaying
+        void paint (juce::Graphics&) override;
+    } meter;
+    CaptureRecorder recorder;
+    std::unique_ptr<CaptureSource> captureSource;
+    juce::String lastCaptureSource;
     juce::Label positionLabel, songLabel, statusLabel;
     juce::ComboBox styleBox, progressionBox;
     gui::SongView view;

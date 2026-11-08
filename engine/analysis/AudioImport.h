@@ -25,6 +25,12 @@ struct CaptureResult
     double durationSeconds() const noexcept { return buffer.getNumSamples() / sampleRate; }
 };
 
+/** Raw audio (any rate, any channel count) to what the analysis gets: float at analysisSampleRate,
+    channels kept. File import and live capture both go through this, so the same samples always
+    give the same buffer (audio-capture acceptance: import and capture analyse identically). */
+CaptureResult makeCaptureResult (const juce::AudioBuffer<float>& raw, double sampleRate, juce::int64 startTimeMs,
+                                 const juce::String& formatName, const juce::File& sourceFile = {});
+
 struct ImportResult
 {
     std::optional<CaptureResult> capture;

@@ -70,18 +70,23 @@ ImportResult AudioImporter::importFile (const juce::File& file) const
         return result;
     }
 
-    CaptureResult capture;
-    capture.originalSampleRate = reader->sampleRate;
-    capture.originalNumChannels = numChannels;
-    capture.originalLengthSamples = reader->lengthInSamples;
-    capture.formatName = reader->getFormatName();
-    capture.sourceFile = file;
-    capture.startTimeMs = startTime;
-    capture.sampleRate = analysisSampleRate;
-    capture.buffer = resample (decoded, reader->sampleRate, analysisSampleRate);
-
-    result.capture = std::move (capture);
+    result.capture = makeCaptureResult (decoded, reader->sampleRate, startTime, reader->getFormatName(), file);
     return result;
+}
+
+CaptureResult makeCaptureResult (const juce::AudioBuffer<float>& raw, double sampleRate, juce::int64 startTimeMs,
+                                 const juce::String& formatName, const juce::File& sourceFile)
+{
+    CaptureResult capture;
+    capture.originalSampleRate = sampleRate;
+    capture.originalNumChannels = raw.getNumChannels();
+    capture.originalLengthSamples = raw.getNumSamples();
+    capture.formatName = formatName;
+    capture.sourceFile = sourceFile;
+    capture.startTimeMs = startTimeMs;
+    capture.sampleRate = analysisSampleRate;
+    capture.buffer = resample (raw, sampleRate, analysisSampleRate);
+    return capture;
 }
 
 } // namespace jaudios::analysis

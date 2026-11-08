@@ -373,6 +373,23 @@ The window, top to bottom:
   says so; click to update it. Clicking while it renders cancels. The files are bar-aligned, as in
   section 3j.
 
+**Recording what your DAW plays** (macOS 13+, no extra driver): press **R** or **Record** and pick
+a source. "System audio" records everything the Mac plays except JAudios itself; you can also pick
+one running app, such as your DAW, or any input device (BlackHole, an aggregate device, an audio
+interface). The first time, macOS asks you to allow JAudios under System Settings > Privacy &
+Security > Screen & System Audio Recording, and the app needs a restart after you allow it. Play
+your song, then press R or Stop. Silence before and after the music is dropped. The capture is
+analysed exactly like an opened file: the same samples give the same buffer and the same analysis,
+and `app-cli capture --simulate FILE` checks that. There is no length limit; past 5 minutes the
+recording streams to a temp file.
+
+```bash
+CLI=build/tools/cli/app-cli_artefacts/Release/app-cli
+"$CLI" capture --list-sources
+"$CLI" capture --source system --seconds 30 --out /tmp/capture.wav     # or app:com.ableton.live, device:BlackHole 2ch
+"$CLI" analyze /tmp/capture.wav
+```
+
 Keys: Space plays/stops, Cmd+Z / Cmd+Shift+Z undo/redo (chords, progression, style, mixer),
 Cmd+0 shows the whole song. Pinch or Cmd+scroll zooms around the pointer, and scrolling pans.
 

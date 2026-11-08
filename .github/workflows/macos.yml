@@ -235,6 +235,19 @@ jobs:
             | python3 -c "import json,sys; g=json.load(sys.stdin)['grid']; print(g); sys.exit(0 if abs(g['first_downbeat_beat'] - 4.0) < 1e-6 else 1)"
           python3 tools/check_export_alignment.py "$RUNNER_TEMP/export-pickup"
 
+      - name: Live capture (sources; capture == import for WAV and AAC; a system-audio attempt)
+        run: |
+          CLI=build/tools/cli/app-cli_artefacts/Release/app-cli
+          "$CLI" capture --list-sources | python3 -c "import json,sys; d=json.load(sys.stdin); print('system audio:', d['system_audio_available'], '|', len(d['sources']), 'sources |', d['error'] or ''); sys.exit(0 if d['system_audio_available'] else 1)"
+          # the acceptance: a capture stream of a file's samples analyses exactly like importing the file
+          "$CLI" capture --simulate tests/fixtures/house_124_Amin.wav --speed 40 | tee "$RUNNER_TEMP/sim-wav.json"
+          afconvert -f m4af -d aac -b 192000 tests/fixtures/house_124_Amin.wav "$RUNNER_TEMP/house.m4a"
+          "$CLI" capture --simulate "$RUNNER_TEMP/house.m4a" --speed 40 | tee "$RUNNER_TEMP/sim-aac.json"
+          python3 -c "import json; [print(f, json.load(open(f))['identical_buffer'], json.load(open(f))['identical_analysis']) for f in ['$RUNNER_TEMP/sim-wav.json', '$RUNNER_TEMP/sim-aac.json']]"
+          # a real system-audio capture needs the Screen & System Audio Recording permission, which a CI
+          # runner does not grant: this shows the error path (diagnostic, not a failure)
+          "$CLI" capture --source system --seconds 2 --out "$RUNNER_TEMP/system.wav" || true
+
       - name: VST3 hosting (out-of-process scan, the test plugin on the chords channel, project persistence)
         run: |
           CLI=build/tools/cli/app-cli_artefacts/Release/app-cli

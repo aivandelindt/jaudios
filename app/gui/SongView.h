@@ -34,6 +34,7 @@ public:
     void togglePlay();
     std::function<void (const juce::String&)> onStatus;
     std::function<void()> onSongChanged; // parts or mixer changed (transport bar refresh)
+    std::function<void()> onRecordKey;   // R
 
     void paint (juce::Graphics&) override;
     void resized() override;
