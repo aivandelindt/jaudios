@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The app, signed with the hardened runtime (tools/package_macos.sh).
+     audio-input: recording from input devices (BlackHole, interfaces).
+     disable-library-validation: the app loads third-party VST3 instruments in process; under the
+     hardened runtime only code signed by the same team could load otherwise (every DAW sets it).
+     ScreenCaptureKit needs no entitlement: macOS asks for the Screen & System Audio Recording
+     permission at first use. -->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

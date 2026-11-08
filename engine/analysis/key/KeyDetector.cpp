@@ -48,6 +48,15 @@ AppConfig AppConfig::fromEnvironment()
     return fromEnvironment (env);
 }
 
+/** The build tree's own paths (`make models` output) are only searched by executables of that
+    tree: a packaged app copied anywhere else uses its bundle and the user's folders, never a
+    build machine's path (packaging-and-release). */
+[[maybe_unused]] static bool insideBuildTree (const char* devPath)
+{
+    const auto buildDir = juce::File (devPath).getParentDirectory();
+    return juce::File::getSpecialLocation (juce::File::currentExecutableFile).isAChildOf (buildDir);
+}
+
 juce::Array<juce::File> sidecarSearchLocations()
 {
     juce::Array<juce::File> locations;
@@ -64,7 +73,8 @@ juce::Array<juce::File> sidecarSearchLocations()
    #endif
     locations.add (exe.getParentDirectory().getChildFile ("resources/sidecar/openkeyscan-analyzer").getChildFile (name));
    #ifdef JAUDIOS_DEV_SIDECAR_DIR
-    locations.add (juce::File (JAUDIOS_DEV_SIDECAR_DIR).getChildFile (name)); // `make models` output
+    if (insideBuildTree (JAUDIOS_DEV_SIDECAR_DIR))
+        locations.add (juce::File (JAUDIOS_DEV_SIDECAR_DIR).getChildFile (name)); // `make models` output
    #endif
     return locations;
 }
@@ -81,7 +91,8 @@ juce::Array<juce::File> modelSearchLocations()
     dirs.add (juce::File::getSpecialLocation (juce::File::currentExecutableFile).getParentDirectory().getChildFile ("resources/models"));
    #endif
    #ifdef JAUDIOS_DEV_MODELS_DIR
-    dirs.add (juce::File (JAUDIOS_DEV_MODELS_DIR));
+    if (insideBuildTree (JAUDIOS_DEV_MODELS_DIR))
+        dirs.add (juce::File (JAUDIOS_DEV_MODELS_DIR));
    #endif
     return dirs;
 }

@@ -36,4 +36,6 @@ set(JAUDIOS_TEST_SOURCES
     # ui-shell
     ${CMAKE_CURRENT_LIST_DIR}/test_song_controller.cpp
     # audio-capture (live)
-    ${CMAKE_CURRENT_LIST_DIR}/test_capture.cpp)
+    ${CMAKE_CURRENT_LIST_DIR}/test_capture.cpp
+    # packaging-and-release
+    ${CMAKE_CURRENT_LIST_DIR}/test_release.cpp)

@@ -1,5 +1,9 @@
 #include "MainComponent.h"
 
+#include "app/core/SelfTest.h"
+
+#include <iostream>
+
 #include <juce_gui_basics/juce_gui_basics.h>
 
 namespace jaudios
@@ -14,6 +18,18 @@ public:
 
     void initialise (const juce::String& commandLine) override
     {
+        // `JAudios --self-test [file]`: the release smoke test, no window (docs/releasing.md)
+        const auto args = getCommandLineParameterArray();
+        if (const int at = args.indexOf ("--self-test"); at >= 0)
+        {
+            const auto file = at + 1 < args.size() ? juce::File::getCurrentWorkingDirectory().getChildFile (args[at + 1].unquoted()) : juce::File();
+            bool ok = false;
+            std::cout << juce::JSON::toString (runSelfTest (file, ok)) << std::endl;
+            setApplicationReturnValue (ok ? 0 : 1);
+            quit();
+            return;
+        }
+
         mainWindow = std::make_unique<MainWindow> (getApplicationName());
 
         // "Open with" / command line: first argument that is an existing file.

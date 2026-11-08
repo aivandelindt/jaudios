@@ -11,13 +11,18 @@ juce::File PluginHost::defaultScanner()
    #else
     const juce::String name = "jaudios-plugin-scanner";
    #endif
-    for (auto dir : { exe.getParentDirectory(),
-                      // dev builds: build/tools/<x>/<x>_artefacts/<Config>/ -> build/tools/plugin-scanner/...
-                      exe.getParentDirectory().getParentDirectory().getParentDirectory().getParentDirectory()
-                          .getChildFile ("plugin-scanner/jaudios-plugin-scanner_artefacts")
-                          .getChildFile (exe.getParentDirectory().getFileName()) })
-        if (dir.getChildFile (name).existsAsFile())
-            return dir.getChildFile (name);
+    // a release bundle / install: next to the executable (Contents/MacOS)
+    if (const auto beside = exe.getParentDirectory().getChildFile (name); beside.existsAsFile())
+        return beside;
+    // a dev build: <build>/tools/plugin-scanner/jaudios-plugin-scanner_artefacts/<Config>/, found by
+    // walking up from wherever this executable is (the app, app-cli, the tests)
+    const auto config = exe.getParentDirectory().getFileName(); // "Release", "Debug" (or a plain dir)
+    auto dir = exe.getParentDirectory();
+    for (int up = 0; up < 8 && dir != dir.getParentDirectory(); ++up, dir = dir.getParentDirectory())
+        for (const auto& c : { config, juce::String ("Release"), juce::String ("Debug"), juce::String ("RelWithDebInfo") })
+            if (const auto f = dir.getChildFile ("tools/plugin-scanner/jaudios-plugin-scanner_artefacts").getChildFile (c).getChildFile (name);
+                f.existsAsFile())
+                return f;
     return exe.getParentDirectory().getChildFile (name);
 }
 

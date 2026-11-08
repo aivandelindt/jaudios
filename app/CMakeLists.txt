@@ -12,6 +12,7 @@ add_library(app_core STATIC
     core/PluginHost.cpp
     core/OfflineRender.cpp
     core/RealtimeTrap.cpp
+    core/SelfTest.cpp
     core/SongController.cpp
     core/SongPipeline.cpp)
 target_include_directories(app_core PUBLIC ${PROJECT_SOURCE_DIR})
