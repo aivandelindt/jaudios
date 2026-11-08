@@ -214,6 +214,9 @@ ExportTiles::ExportTiles() = default;
 
 void ExportTiles::setSong (SongController* s, const juce::File& dragFolder)
 {
+    for (auto& [i, j] : jobs)
+        j->cancel();
+    jobs.clear();
     song = s;
     folder = dragFolder;
     tileList.clear();
@@ -255,7 +258,60 @@ juce::File ExportTiles::fileFor (int index)
     if (song == nullptr || index < 0 || index >= (int) tileList.size())
         return {};
     const auto& t = tileList[(size_t) index];
-    return t.kind == "midi" ? song->exportMidi (t.part, folder) : song->exportWav (t.part, folder);
+    if (t.kind == "midi")
+        return song->exportMidi (t.part, folder);
+    return wavState (index) == WavState::ready ? jobs[index]->file() : juce::File();
+}
+
+std::shared_ptr<WavExportJob> ExportTiles::job (int index) const
+{
+    const auto it = jobs.find (index);
+    return it != jobs.end() ? it->second : nullptr;
+}
+
+ExportTiles::WavState ExportTiles::wavState (int index) const
+{
+    const auto j = job (index);
+    if (j == nullptr || song == nullptr)
+        return WavState::none;
+    switch (j->state())
+    {
+        case WavExportJob::State::rendering: return WavState::rendering;
+        case WavExportJob::State::done:      return j->revision() == song->revision() ? WavState::ready : WavState::outOfDate;
+        case WavExportJob::State::failed:    return WavState::failed;
+        case WavExportJob::State::cancelled: return WavState::none;
+    }
+    return WavState::none;
+}
+
+void ExportTiles::clickTile (int index)
+{
+    if (song == nullptr || index < 0 || index >= (int) tileList.size() || tileList[(size_t) index].kind != "wav")
+        return;
+    if (wavState (index) == WavState::rendering)
+    {
+        jobs[index]->cancel();
+        if (onStatus)
+            onStatus ("Cancelled");
+    }
+    else if (wavState (index) != WavState::ready)
+    {
+        jobs[index] = song->startWavExport (tileList[(size_t) index].part, folder);
+        if (onStatus)
+            onStatus ("Rendering " + tileList[(size_t) index].label + "... drag the tile when it is ready");
+        startTimerHz (15);
+    }
+    repaint();
+}
+
+void ExportTiles::timerCallback()
+{
+    bool any = false;
+    for (const auto& [i, j] : jobs)
+        any = any || j->state() == WavExportJob::State::rendering;
+    repaint();
+    if (! any)
+        stopTimer();
 }
 
 void ExportTiles::paint (juce::Graphics& g)
@@ -277,9 +333,27 @@ void ExportTiles::paint (juce::Graphics& g)
         g.setColour (colours::text);
         g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
         g.drawText (t.label, r.reduced (8, 4).removeFromTop (r.getHeight() / 2), juce::Justification::centredLeft);
-        g.setColour (colours::textDim);
+        juce::String sub = "MIDI";
+        if (t.kind == "wav")
+            switch (wavState (i))
+            {
+                case WavState::none:      sub = "Click: render WAV"; break;
+                case WavState::rendering: sub = "WAV " + juce::String (juce::roundToInt (job (i)->progress() * 100.0)) + " %"; break;
+                case WavState::ready:     sub = "WAV ready: drag"; break;
+                case WavState::outOfDate: sub = "Changed: click"; break;
+                case WavState::failed:    sub = "Failed: retry"; break;
+            }
+        g.setColour (t.kind == "wav" && wavState (i) == WavState::ready ? c : colours::textDim);
         g.setFont (juce::FontOptions (11.0f));
-        g.drawText (t.kind == "midi" ? "MIDI" : "WAV 24-bit", r.reduced (8, 4).removeFromBottom (r.getHeight() / 2 - 4), juce::Justification::centredLeft);
+        g.drawText (sub, r.reduced (8, 4).removeFromBottom (r.getHeight() / 2 - 4), juce::Justification::centredLeft);
+        if (t.kind == "wav" && wavState (i) == WavState::rendering)
+        {
+            const auto bar = r.reduced (6.0f, 0.0f).removeFromBottom (3.0f);
+            g.setColour (c.withAlpha (0.25f));
+            g.fillRect (bar);
+            g.setColour (c);
+            g.fillRect (bar.withWidth (bar.getWidth() * (float) job (i)->progress()));
+        }
     }
 }
 
@@ -295,8 +369,13 @@ void ExportTiles::mouseDrag (const juce::MouseEvent& e)
     if (pressed < 0 || dragStarted || e.getDistanceFromDragStart() < 6)
         return;
     dragStarted = true;
-    if (onStatus)
-        onStatus ("Preparing " + tileList[(size_t) pressed].label + "...");
+    const auto& t = tileList[(size_t) pressed];
+    if (t.kind == "wav" && wavState (pressed) != WavState::ready)
+    {
+        if (wavState (pressed) != WavState::rendering)
+            clickTile (pressed); // start it; the drag can follow once it is ready
+        return;
+    }
     const auto f = fileFor (pressed);
     if (! f.existsAsFile())
     {
@@ -309,8 +388,10 @@ void ExportTiles::mouseDrag (const juce::MouseEvent& e)
     dragFilesOut ({ f.getFullPathName() }, *this);
 }
 
-void ExportTiles::mouseUp (const juce::MouseEvent&)
+void ExportTiles::mouseUp (const juce::MouseEvent& e)
 {
+    if (! dragStarted && pressed >= 0 && tileAt (e.getPosition()) == pressed)
+        clickTile (pressed);
     pressed = -1;
     repaint();
 }

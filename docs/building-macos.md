@@ -359,11 +359,19 @@ The window, top to bottom:
   on the little piano, and clicking it puts it in; the bassline follows. A dot marks a changed
   chord, and "Back to the suggestion" undoes it.
 - **Bass** (piano roll; notes that will be ducked by kicks are outlined) and **Drums** (one row per
-  element). Every lane has its channel's mute, solo, gain and **FX** (the insert chain from
-  section 3i).
-- **Export tiles** (right): drag a tile into your DAW. MIDI tiles are written instantly; WAV tiles
-  are rendered as the drag starts, through a second engine set up like the one playing (same
-  sounds, FX and mixer). The files are bar-aligned, as in section 3j.
+  element, initials at the left). Every lane has its channel's mute, solo, gain and **FX** (the
+  insert chain from section 3i).
+- **Accents:** click a bass note or a drum hit to cycle it through accent, ghost and off, then back
+  to what was generated. Drag it up or down to set its velocity, one point per pixel. Click an empty
+  drum cell to add a hit there. Edited notes get a small dot, and switched-off ones stay as hollow
+  outlines you can click back on. The status line describes what is under the pointer. Edits are
+  undoable and survive chord and progression changes; a style change starts from a new groove.
+- **Export tiles** (right): drag a tile into your DAW. MIDI tiles are written as the drag starts.
+  A WAV tile is rendered in the background first: click it (or start dragging it) and it shows its
+  progress; when it says ready, drag it. It renders through a second engine set up like the one
+  playing (same sounds, FX and mixer), while the song keeps playing. Change anything and the tile
+  says so; click to update it. Clicking while it renders cancels. The files are bar-aligned, as in
+  section 3j.
 
 Keys: Space plays/stops, Cmd+Z / Cmd+Shift+Z undo/redo (chords, progression, style, mixer),
 Cmd+0 shows the whole song. Pinch or Cmd+scroll zooms around the pointer, and scrolling pans.

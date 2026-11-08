@@ -3,6 +3,7 @@
 #include "TestSignals.h"
 
 #include "app/core/SongController.h"
+#include "engine/synth/DrumSampler.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
@@ -208,4 +209,178 @@ TEST_CASE ("Export tiles: MIDI and WAV files for dragging into a DAW", "[ui][son
     r->read (&b, 0, b.getNumSamples(), 0, true, true);
     CHECK (b.getMagnitude (0, 0, b.getNumSamples()) > 0.01f);
     CHECK_FALSE (f.song->exportWav ("vocals_stem", tmp.dir).exists()); // no stems in this song
+}
+
+namespace
+{
+int countDrumNoteOns (const SongController& s, int note)
+{
+    int n = 0;
+    for (const auto* e : synth::drumsToMidi (s.parts().drumNotes))
+        if (e->message.isNoteOn() && e->message.getNoteNumber() == note)
+            ++n;
+    return n;
+}
+} // namespace
+
+TEST_CASE ("Accent editor: a click cycles a drum hit accent -> ghost -> off -> groove; undo per click", "[ui][song][accents]")
+{
+    Fixture f;
+    // the first kick of bar 2 (the pop groove has a kick on every downbeat)
+    const SongController::DrumHit kick { gen::DrumElement::kick, 1, 0 };
+    const int base = f.song->generatedDrumVelocity (kick);
+    REQUIRE (base > 0);
+    const int kicks = countDrumNoteOns (*f.song, 36);
+    f.song->cycleDrumAccent (kick);
+    CHECK (f.song->drumVelocity (kick) == SongController::accentOf (base));
+    CHECK (f.song->isDrumHitEdited (kick));
+    f.song->cycleDrumAccent (kick);
+    CHECK (f.song->drumVelocity (kick) == SongController::ghostOf (base));
+    f.song->cycleDrumAccent (kick);
+    CHECK (f.song->drumVelocity (kick) == 0);
+    CHECK (countDrumNoteOns (*f.song, 36) == kicks - 1); // gone from the clip too
+    f.song->cycleDrumAccent (kick);
+    CHECK_FALSE (f.song->isDrumHitEdited (kick));
+    CHECK (f.song->drumVelocity (kick) == base);
+    // every click was its own undo step
+    for (int expected : { 0, SongController::ghostOf (base), SongController::accentOf (base), base })
+    {
+        REQUIRE (f.song->undoManager().undo());
+        CHECK (f.song->drumVelocity (kick) == expected);
+    }
+}
+
+TEST_CASE ("Accent editor: velocity drags are one undo step; an empty step gets an added hit", "[ui][song][accents]")
+{
+    Fixture f;
+    const SongController::DrumHit hat { gen::DrumElement::hat, 2, 2 };
+    const int base = f.song->generatedDrumVelocity (hat);
+    REQUIRE (base > 0);
+    for (int v = base; v <= base + 20; v += 4) // a drag
+        f.song->setDrumVelocity (hat, v);
+    CHECK (f.song->drumVelocity (hat) == base + 20);
+    bool found = false;
+    for (const auto& n : f.song->parts().drumNotes)
+        if (n.element == hat.element && n.bar == hat.bar && n.step == hat.step)
+            found = n.velocity == base + 20;
+    CHECK (found);
+    REQUIRE (f.song->undoManager().undo());
+    CHECK (f.song->drumVelocity (hat) == base);
+
+    // a clap where the groove has none: click adds it at the generator's position for that step
+    SongController::DrumHit added { gen::DrumElement::clap, 3, 3 };
+    while (f.song->generatedDrumVelocity (added) > 0)
+        ++added.step;
+    const int claps = countDrumNoteOns (*f.song, 39);
+    f.song->cycleDrumAccent (added);
+    CHECK (f.song->drumVelocity (added) == SongController::addedHitVelocity);
+    CHECK (countDrumNoteOns (*f.song, 39) == claps + 1);
+    const auto bars = songBars (f.song->song());
+    const double stepLen = (bars[3].second - bars[3].first) / 16.0;
+    bool placed = false;
+    for (const auto& n : f.song->parts().drumNotes)
+        if (n.element == added.element && n.bar == 3 && n.step == added.step)
+            placed = std::abs (n.startSec - (bars[3].first + added.step * stepLen)) < 0.5 * stepLen;
+    CHECK (placed);
+    f.song->clearAccents();
+    CHECK (f.song->numAccentEdits() == 0);
+    CHECK (countDrumNoteOns (*f.song, 39) == claps);
+}
+
+TEST_CASE ("Accent edits survive chord and progression changes, and a style change drops them", "[ui][song][accents]")
+{
+    Fixture f;
+    const auto& bassNotes = f.song->parts().bassNotes;
+    REQUIRE (bassNotes.size() > 4);
+    const auto target = bassNotes[3];
+    const int step = f.song->bassStepOf (target);
+    f.song->cycleBassAccent (step);
+    const int accented = SongController::accentOf (target.velocity);
+    CHECK (f.song->bassVelocity (step) == accented);
+    const SongController::DrumHit kick { gen::DrumElement::kick, 0, 0 };
+    f.song->cycleDrumAccent (kick);
+
+    // another chord in that slot: new pitches, same rhythm, the accent stays on its step
+    const auto alts = f.song->alternativesFor (target.slot);
+    REQUIRE_FALSE (alts.empty());
+    f.song->replaceChord (target.slot, alts.front().chord);
+    bool kept = false;
+    for (const auto& n : f.song->parts().bassNotes)
+        if (f.song->bassStepOf (n) == step)
+            kept = n.velocity == accented;
+    CHECK (kept);
+    f.song->selectProgression (1);
+    CHECK (f.song->bassVelocity (step) == accented);
+    CHECK (f.song->isDrumHitEdited (kick));
+
+    f.song->setStyle (gen::Style::techno); // another groove: the edits no longer mean anything
+    CHECK (f.song->numAccentEdits() == 0);
+    REQUIRE (f.song->undoManager().undo());
+    CHECK (f.song->numAccentEdits() == 2);
+    // a step with no bass note cannot be "edited"
+    int empty = step + 1;
+    while (f.song->generatedBassVelocity (empty) > 0)
+        ++empty;
+    f.song->setBassVelocity (empty, 100);
+    CHECK_FALSE (f.song->isBassNoteEdited (empty));
+}
+
+namespace
+{
+bool waitFor (const WavExportJob& job, int timeoutMs = 120000)
+{
+    const auto until = juce::Time::getMillisecondCounter() + (juce::uint32) timeoutMs;
+    while (job.state() == WavExportJob::State::rendering && juce::Time::getMillisecondCounter() < until)
+        juce::Thread::sleep (5);
+    return job.state() != WavExportJob::State::rendering;
+}
+} // namespace
+
+TEST_CASE ("WAV export jobs render on the export thread while the live engine keeps playing", "[ui][song][export]")
+{
+    Fixture f;
+    test::TempDir a, b;
+    const auto blocking = f.song->exportWav ("chords", a.dir, 0.5);
+    REQUIRE (blocking.existsAsFile());
+
+    auto job = f.song->startWavExport ("chords", b.dir, 0.5);
+    REQUIRE (job != nullptr);
+    CHECK (job->revision() == f.song->revision());
+    // the live engine renders on this thread meanwhile (as the audio callback would)
+    f.engine.play();
+    juce::AudioBuffer<float> block (2, 512);
+    for (int i = 0; i < 200; ++i)
+        f.engine.renderBlock (block.getArrayOfWritePointers(), 2, 512);
+    f.engine.stop();
+    REQUIRE (waitFor (*job));
+    CHECK (job->state() == WavExportJob::State::done);
+    CHECK_THAT (job->progress(), Catch::Matchers::WithinAbs (1.0, 1e-9));
+    REQUIRE (job->file().existsAsFile());
+    // the same bytes as the blocking export: the job rendered the song as it was when it started
+    juce::MemoryBlock x, y;
+    REQUIRE (blocking.loadFileAsData (x));
+    REQUIRE (job->file().loadFileAsData (y));
+    CHECK (x == y);
+
+    // edits after the start make a finished render out of date (the tile offers an update)
+    const int before = f.song->revision();
+    f.song->cycleDrumAccent ({ gen::DrumElement::kick, 0, 0 });
+    CHECK (f.song->revision() != before);
+    CHECK (job->revision() != f.song->revision());
+    const int afterAccent = f.song->revision();
+    REQUIRE (f.engine.setFxParameter (ChannelId::chords, "reverb_on", "on"));
+    CHECK (f.song->revision() != afterAccent); // FX changes count too
+}
+
+TEST_CASE ("A WAV export job can be cancelled", "[ui][song][export]")
+{
+    Fixture f;
+    test::TempDir tmp;
+    auto job = f.song->startWavExport ("mix", tmp.dir, 2.0);
+    REQUIRE (job != nullptr);
+    job->cancel();
+    REQUIRE (waitFor (*job));
+    CHECK (job->state() == WavExportJob::State::cancelled);
+    CHECK_FALSE (job->file().exists());
+    CHECK (f.song->startWavExport ("vocals_stem", tmp.dir) == nullptr); // not exportable here
 }

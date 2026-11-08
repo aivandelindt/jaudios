@@ -31,6 +31,7 @@ SongView::SongView()
         overlay.setPosition (t);
     };
     tiles.onStatus = [this] (const juce::String& s) { if (onStatus) onStatus (s); };
+    bass.onStatus = drums.onStatus = [this] (const juce::String& s) { if (onStatus) onStatus (s); };
     setWantsKeyboardFocus (true);
     startTimerHz (60);
 }

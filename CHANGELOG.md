@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### UI shell, part 2 (M10b, ui-shell): accent editor, background WAV export
+- **Accent editor** (`SongController` + the bass and drum lanes):
+  - Drum hits are addressed by element, bar and 1/16 step (the generator's grid). Bass notes are addressed by their 1/16 step on the
+    export grid, so edits stay on their beat when chords change the pitches.
+  - A click cycles accent (×1.3 + 8) → ghost (×0.4) → off → generated. Each click is its own undo step.
+  - A vertical drag sets the velocity, and the whole drag is one undo step.
+  - Clicking an empty drum cell adds a hit, placed like the generator places one (swing on odd steps).
+  - Edits survive chord replacements and progression changes. A style change drops them as part of the same undoable step.
+  - Lanes mark edited notes with a dot and draw switched-off ones hollow, so they can be clicked back on. The status line describes
+    the note under the pointer.
+- **WAV export in the background** (`WavExportJob`, `SongController::startWavExport`):
+  - The offline engine is set up on the message thread from the current state, then rendered on the controller's export thread
+    with progress and cancel (`renderPart` gained a progress / cancel callback). Engines are destroyed on the message thread.
+  - The tiles show a state: click to render, progress, ready to drag, changed (click to update), or failed.
+  - `SongController::revision()` changes with every part, accent, mixer and FX change (FX through parameter listeners, synchronously),
+    so a finished render knows when it is out of date.
+- Tests:
+  - accents: click cycle and per-click undo; a drag as one undo step; added hits; clear; survival across chord and progression
+    changes; a style change drops them;
+  - jobs: a background render is byte-identical to the blocking one while the live engine renders on the main thread; out of date
+    after an accent or FX change; cancel;
+  - UI: drum lane click, drag and add; bass lane cycle, including clicking an off note back on; WAV tile states (render → ready →
+    out of date → update → cancel).
+  - Full repaint median ~2.3 ms. The lanes skip edit lookups when there are no edits.
+
 ### UI shell, part 1 (M10a, ui-shell)
 - `app/core/SongPipeline`: the import → stems (optional) → key and beats → transcription → evidence → suggestions → parts pipeline,
   moved out of `app-cli` so the app and the CLI share one implementation. CLI outputs are unchanged: audition peaks and note counts,

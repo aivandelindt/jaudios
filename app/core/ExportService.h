@@ -26,9 +26,11 @@ juce::String partId (const ExportPart&);
 /** Renders `part` through `engine` from the transport start: the source's `sourceLength` samples
     plus `tailSeconds` of tails (reverb, delay, releases keep ringing after the transport stops).
     The engine is re-prepared first so every render starts from the same state (strips snapped to
-    the solo, FX and instruments reset). Message thread; the engine must not be on a device. */
+    the solo, FX and instruments reset). The engine must not be on a device, and nothing else may
+    use it meanwhile (any one thread). `progress` gets 0..1 every few blocks; returning false
+    cancels (the result is then empty). */
 juce::AudioBuffer<float> renderPart (AudioEngine&, const ExportPart&, juce::int64 sourceLength, double sampleRate,
-                                     double tailSeconds, int blockSize = 512);
+                                     double tailSeconds, int blockSize = 512, const std::function<bool (double)>& progress = {});
 
 /** "Song - Chords (A minor, 124 BPM)". */
 juce::String exportFileStem (const juce::String& song, const juce::String& part, const juce::String& key, double bpm);

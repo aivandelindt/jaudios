@@ -40,7 +40,7 @@ std::optional<ExportPart> findExportPart (juce::StringRef nameOrId, bool withSte
 }
 
 juce::AudioBuffer<float> renderPart (AudioEngine& engine, const ExportPart& part, juce::int64 sourceLength, double sampleRate,
-                                     double tailSeconds, int blockSize)
+                                     double tailSeconds, int blockSize, const std::function<bool (double)>& progress)
 {
     std::array<bool, numChannelIds> solos {};
     for (int c = 0; c < numChannelIds; ++c)
@@ -61,6 +61,11 @@ juce::AudioBuffer<float> renderPart (AudioEngine& engine, const ExportPart& part
         engine.renderBlock (block.getArrayOfWritePointers(), 2, len);
         for (int ch = 0; ch < 2; ++ch)
             out.copyFrom (ch, pos, block, ch, 0, len);
+        if (progress && (pos / blockSize) % 64 == 0 && ! progress ((double) pos / n))
+        {
+            out.setSize (2, 0);
+            break;
+        }
     }
     engine.stop();
     for (int c = 0; c < numChannelIds; ++c)

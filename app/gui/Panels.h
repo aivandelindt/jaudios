@@ -4,6 +4,8 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <map>
+
 namespace jaudios::gui
 {
 
@@ -69,9 +71,11 @@ private:
     static constexpr int rowHeight = 26, headerHeight = 30;
 };
 
-/** Export tiles: a row per part, MIDI and WAV tiles; drag a tile into a DAW (the file is written
-    into the session's drag folder as the drag starts). */
-class ExportTiles final : public juce::Component
+/** Export tiles: MIDI and WAV per part; drag a tile into a DAW. A MIDI file is written as the drag
+    starts. A WAV is rendered in the background first: click the tile (or start dragging it), watch
+    its progress, then drag it. It goes out of date (and says so) when the song changes; a click
+    while it renders cancels. */
+class ExportTiles final : public juce::Component, private juce::Timer
 {
 public:
     ExportTiles();
@@ -80,8 +84,13 @@ public:
     const std::vector<Tile>& tiles() const noexcept { return tileList; }
     juce::Rectangle<int> tileBounds (int index) const;
     int tileAt (juce::Point<int>) const;
-    /** Writes the tile's file (MIDI now, WAV rendered offline) and returns it. */
+    /** MIDI: written now. WAV: the rendered file if it is ready and up to date, else nothing. */
     juce::File fileFor (int index);
+    /** Starts (or restarts, when out of date) a WAV tile's render; a click while it renders cancels it. */
+    void clickTile (int index);
+    enum class WavState { none, rendering, ready, outOfDate, failed };
+    WavState wavState (int index) const;
+    std::shared_ptr<WavExportJob> job (int index) const;
     void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
@@ -89,9 +98,11 @@ public:
     std::function<void (const juce::String&)> onStatus;
 
 private:
+    void timerCallback() override;
     SongController* song = nullptr;
     juce::File folder;
     std::vector<Tile> tileList;
+    std::map<int, std::shared_ptr<WavExportJob>> jobs;
     int pressed = -1;
     bool dragStarted = false;
 };
